@@ -6,7 +6,7 @@
 *   **Frontend:** Next.js (App Router), React
 *   **Styling:** Tailwind CSS + ShadCN UI (Dark Mode/Cyberpunk aesthetic)
 *   **AI Integration:** Vercel AI SDK + Gemini 3 Pro
-*   **Backend:** Next.js Server Actions (talking to Supabase)
+*   **Backend:** In-Memory JSON Processing (No Database)
 
 ---
 
@@ -22,12 +22,14 @@
     *   `src/app/chat/page.tsx`: The main chat interface.
 
 ## Day 6: RAG Implementation (The Brain)
-### 1. Retrieval Action
-*   Create a Server Action `getRelevantProducts(userQuery)`.
+### 1. Retrieval Action (Local)
+*   Create a utility `src/lib/search.ts`.
 *   **Logic:**
-    1.  Convert `userQuery` to a vector embedding.
-    2.  Query Supabase for the top 10 most similar products.
-    3.  Return this JSON list.
+    1.  Load `products.json` and `embeddings.json` into memory (variables).
+    2.  Convert `userQuery` to a vector embedding (using Gemini API).
+    3.  **Math:** Calculate Cosine Similarity between Query Vector and all Product Vectors.
+    4.  Sort by score, take top 10.
+    5.  Return the Product Objects.
 
 ### 2. The Chat Loop
 *   Use `streamText` from Vercel AI SDK.
