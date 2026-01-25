@@ -1,0 +1,167 @@
+{
+    "model": "gemini-embedding-001",
+    "dimension": 768,
+    "generated_at": "2026-01-25T20:00:00+05:30",
+    "embeddings": [
+        {
+            "id": "gpu-001",
+            "text": "ASUS GeForce RTX 4060 Dual OC 8GB GDDR6 graphics card GPU for 1080p gaming content creation video editing mid-range nvidia",
+            "vector": [
+                0.023,
+                -0.045,
+                0.112,
+                0.087,
+                -0.034,
+                0.156,
+                -0.089,
+                0.045,
+                0.067,
+                -0.123
+            ]
+        },
+        {
+            "id": "gpu-002",
+            "text": "Gigabyte GeForce RTX 4060 Ti Gaming OC 8GB GDDR6 graphics card GPU for 1440p gaming streaming blender mid-range nvidia",
+            "vector": [
+                0.034,
+                -0.056,
+                0.098,
+                0.092,
+                -0.045,
+                0.167,
+                -0.078,
+                0.056,
+                0.078,
+                -0.134
+            ]
+        },
+        {
+            "id": "cpu-001",
+            "text": "AMD Ryzen 5 7600 6-core 12-thread processor CPU for gaming productivity multitasking AM5 socket mid-range",
+            "vector": [
+                -0.045,
+                0.123,
+                0.067,
+                -0.089,
+                0.145,
+                -0.034,
+                0.078,
+                -0.056,
+                0.112,
+                0.045
+            ]
+        },
+        {
+            "id": "cpu-002",
+            "text": "Intel Core i5-14400F 10-core 16-thread processor CPU for gaming budget builds office work LGA1700 socket mid-range",
+            "vector": [
+                -0.056,
+                0.134,
+                0.078,
+                -0.098,
+                0.156,
+                -0.045,
+                0.089,
+                -0.067,
+                0.123,
+                0.056
+            ]
+        },
+        {
+            "id": "ram-001",
+            "text": "G.Skill Trident Z5 RGB DDR5 32GB 6000MHz memory RAM for high-end gaming content creation video editing",
+            "vector": [
+                0.067,
+                -0.089,
+                0.145,
+                0.034,
+                -0.078,
+                0.112,
+                -0.045,
+                0.098,
+                0.023,
+                -0.156
+            ]
+        },
+        {
+            "id": "mobo-001",
+            "text": "MSI MAG B650 TOMAHAWK WIFI motherboard AM5 socket for Ryzen 7000 series future-proofing DDR5 wifi",
+            "vector": [
+                -0.078,
+                0.112,
+                0.056,
+                -0.134,
+                0.089,
+                -0.023,
+                0.145,
+                -0.098,
+                0.067,
+                0.034
+            ]
+        },
+        {
+            "id": "psu-001",
+            "text": "Corsair RM750e 750W 80+ Gold power supply PSU fully modular for mid-range builds quiet operation",
+            "vector": [
+                0.089,
+                -0.067,
+                0.123,
+                0.045,
+                -0.112,
+                0.078,
+                -0.156,
+                0.034,
+                0.098,
+                -0.045
+            ]
+        },
+        {
+            "id": "case-001",
+            "text": "Lian Li Lancool II Mesh RGB White ATX Mid Tower case for white builds airflow RGB aesthetic",
+            "vector": [
+                0.112,
+                -0.034,
+                0.089,
+                0.067,
+                -0.145,
+                0.056,
+                -0.098,
+                0.123,
+                0.045,
+                -0.078
+            ]
+        },
+        {
+            "id": "ssd-001",
+            "text": "WD Black SN770 1TB NVMe M.2 SSD storage for gaming boot drive fast PCIe 4.0",
+            "vector": [
+                0.134,
+                -0.056,
+                0.067,
+                0.089,
+                -0.123,
+                0.045,
+                -0.078,
+                0.145,
+                0.034,
+                -0.112
+            ]
+        },
+        {
+            "id": "cooler-001",
+            "text": "DeepCool AK620 tower air cooler CPU cooler for high-end cooling quiet builds value AM5 LGA1700",
+            "vector": [
+                -0.098,
+                0.078,
+                0.145,
+                -0.045,
+                0.067,
+                -0.134,
+                0.023,
+                -0.112,
+                0.089,
+                0.056
+            ]
+        }
+    ]
+}
