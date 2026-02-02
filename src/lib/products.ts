@@ -1,17 +1,34 @@
 // Product type definitions based on products.json schema
 
 export interface ProductSpecs {
+    // Registry metadata (from targeted scraping)
+    registry_id?: string;
+    registry_family?: string;
+    search_term?: string;
+
+    // Canonical/reference metadata
+    architecture?: string;
+    launch_year?: number;
+
     // GPU specs
     vram?: string;
+    vram_variants?: string[];
+    memory_type?: string;
     boost_clock?: string;
     tdp?: string;
+    tdp_w?: number;
+    tdp_w_variants?: number[];
+    memory_bus_bit?: number;
     length_mm?: number;
     ports?: string[];
 
     // CPU specs
     cores?: number;
     threads?: number;
+    p_cores?: number;
+    e_cores?: number;
     base_clock?: string;
+    cache_l3_mb?: number;
     socket?: string;
 
     // RAM specs

@@ -7,7 +7,10 @@
     "build": "next build",
     "start": "next start",
     "lint": "eslint",
-    "sync-data": "tsx scripts/sync-data.ts"
+    "sync-data": "bun scripts/sync-data.ts",
+    "sync-data:tsx": "tsx scripts/sync-data.ts",
+    "generate-embeddings": "bun scripts/generate-embeddings.ts",
+    "generate-embeddings:tsx": "tsx scripts/generate-embeddings.ts"
   },
   "dependencies": {
     "@ai-sdk/google": "^3.0.13",

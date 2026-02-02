@@ -12,13 +12,29 @@ import * as path from 'path';
 import * as readline from 'readline';
 
 // Paths configuration
-const SCRAPER_DATA_DIR = path.resolve(__dirname, '../../specgen-scraper/data');
+const SCRAPER_DATA_DIR = path.resolve(__dirname, '../../specgen-scraper/scraper-data');
 const CHATBOT_DATA_DIR = path.resolve(__dirname, '../data');
 
-const PRODUCTS_JSONL = path.join(SCRAPER_DATA_DIR, 'products_gpu.jsonl');
+const REFERENCE_SPECS_DIR = path.join(SCRAPER_DATA_DIR, 'reference-specs');
+const REFERENCE_SPECS_GPU = path.join(REFERENCE_SPECS_DIR, 'gpus.json');
+const REFERENCE_SPECS_CPU = path.join(REFERENCE_SPECS_DIR, 'cpus.json');
+
 const EMBEDDINGS_JSON = path.join(SCRAPER_DATA_DIR, 'embeddings.json');
 const OUTPUT_PRODUCTS = path.join(CHATBOT_DATA_DIR, 'products.json');
 const OUTPUT_EMBEDDINGS = path.join(CHATBOT_DATA_DIR, 'embeddings.json');
+
+type Category = "GPU" | "CPU" | "RAM" | "Motherboard" | "PSU" | "Case" | "Storage" | "CPU Cooler";
+
+interface ReferenceSpecsEntry {
+    specs?: Record<string, unknown>;
+    sources?: string[];
+}
+
+interface ReferenceSpecsFile {
+    version: string;
+    last_updated?: string;
+    specs_by_registry_id: Record<string, ReferenceSpecsEntry>;
+}
 
 // Types for scraped product
 interface ScrapedProduct {
@@ -43,7 +59,7 @@ interface ChatbotProduct {
     id: string;
     name: string;
     normalized_name: string;
-    category: string;
+    category: Category;
     brand: string;
     price: number;
     currency: string;
@@ -55,6 +71,43 @@ interface ChatbotProduct {
     specs: Record<string, unknown>;
     use_cases: string[];
     performance_tier: 'budget' | 'mid-range' | 'high-end';
+}
+
+function _normalizeForMatch(text: string): string {
+    return (text || "").toLowerCase().replace(/[^a-z0-9]+/g, "");
+}
+
+function _getStringSpec(specs: Record<string, unknown>, key: string): string | undefined {
+    const value = specs[key];
+    return typeof value === "string" ? value : undefined;
+}
+
+function _matchesRegistryIdInTitle(title: string, registryId: string): boolean {
+    const titleNorm = _normalizeForMatch(title);
+    const modelPart = registryId.split(".").pop() || "";
+    const modelTokenNorm = _normalizeForMatch(modelPart.replace(/_/g, " "));
+    if (!modelTokenNorm) return false;
+    return titleNorm.includes(modelTokenNorm);
+}
+
+function loadReferenceSpecsMap(filePath: string): Map<string, Record<string, unknown>> {
+    if (!fs.existsSync(filePath)) {
+        return new Map();
+    }
+
+    const raw = fs.readFileSync(filePath, "utf-8");
+    const parsed = JSON.parse(raw) as ReferenceSpecsFile;
+    const map = new Map<string, Record<string, unknown>>();
+
+    const entries = parsed?.specs_by_registry_id || {};
+    for (const [registryId, entry] of Object.entries(entries)) {
+        const specs = entry?.specs;
+        if (specs && typeof specs === "object") {
+            map.set(registryId, specs);
+        }
+    }
+
+    return map;
 }
 
 /**
@@ -98,10 +151,17 @@ function inferUseCases(category: string, specs: Record<string, unknown>): string
 /**
  * Normalize category name - uses multiple signals for accuracy
  */
-function normalizeCategory(category: string | undefined, name: string, specs: Record<string, unknown>): string {
+function normalizeCategory(category: string | undefined, name: string, specs: Record<string, unknown>): Category | null {
     const cat = (category || '').toLowerCase();
     const nameLower = name.toLowerCase();
     const specsStr = JSON.stringify(specs).toLowerCase();
+    const registryId = (_getStringSpec(specs, "registry_id") || "").toLowerCase();
+
+    // Prefer registry-based categorization when available
+    if (registryId) {
+        if (registryId.includes(".ryzen_") || registryId.includes(".core_")) return "CPU";
+        if (registryId.includes(".rtx_") || registryId.includes(".gtx_") || registryId.includes(".rx_") || registryId.includes(".arc_")) return "GPU";
+    }
 
     // GPU detection - check name and specs for GPU indicators
     const gpuIndicators = ['rtx', 'gtx', 'geforce', 'radeon', 'rx ', 'rx-', 'arc a', 'arc b',
@@ -123,20 +183,27 @@ function normalizeCategory(category: string | undefined, name: string, specs: Re
 
     // Other categories from explicit category field
     if (cat.includes('cpu') || cat.includes('processor')) return 'CPU';
-    if (cat.includes('motherboard') || cat.includes('mobo')) return 'Motherboard';
+    if (cat.includes('motherboard') || cat.includes('mobo') || cat.includes('mainboard')) return 'Motherboard';
     if (cat.includes('psu') || cat.includes('power')) return 'PSU';
     if (cat.includes('case') || cat.includes('cabinet')) return 'Case';
-    if (cat.includes('storage') || cat.includes('ssd') || cat.includes('hdd')) return 'Storage';
+    if (cat.includes('storage') || cat.includes('ssd') || cat.includes('hdd') || cat.includes('nvme')) return 'Storage';
     if (cat.includes('cooler')) return 'CPU Cooler';
     if (cat.includes('ram') && !gpuIndicators.some(ind => nameLower.includes(ind))) return 'RAM';
 
-    return 'GPU'; // Default for this GPU-focused integration
+    // If we cannot confidently infer a supported category, skip.
+    return null;
 }
 
 /**
  * Transform scraped product to chatbot format
  */
-function transformProduct(scraped: ScrapedProduct): ChatbotProduct | null {
+function transformProduct(
+    scraped: ScrapedProduct,
+    referenceSpecs: {
+        gpu: Map<string, Record<string, unknown>>;
+        cpu: Map<string, Record<string, unknown>>;
+    }
+): ChatbotProduct | null {
     // Skip products without essential fields
     if (!scraped.id || !scraped.name) {
         console.log(`Skipping product without id/name`);
@@ -148,8 +215,29 @@ function transformProduct(scraped: ScrapedProduct): ChatbotProduct | null {
         return null;
     }
 
-    const specs = scraped.specs || {};
-    const category = normalizeCategory(scraped.category, scraped.name, specs);
+    const scrapedSpecs = scraped.specs || {};
+    const category = normalizeCategory(scraped.category, scraped.name, scrapedSpecs);
+    if (!category) return null;
+
+    const registryId = _getStringSpec(scrapedSpecs, "registry_id");
+
+    // Safety guard: if a product is tagged with a registry_id but doesn't actually mention the model, drop it.
+    // This prevents attaching CPU/GPU context to irrelevant search results (common on marketplaces).
+    if (registryId && !_matchesRegistryIdInTitle(scraped.name, registryId)) {
+        return null;
+    }
+
+    // Merge canonical reference specs (listing-specific scraped specs win)
+    let mergedSpecs: Record<string, unknown> = scrapedSpecs;
+    if (registryId) {
+        const ref =
+            category === "GPU" ? referenceSpecs.gpu.get(registryId)
+            : category === "CPU" ? referenceSpecs.cpu.get(registryId)
+            : undefined;
+        if (ref) {
+            mergedSpecs = { ...ref, ...scrapedSpecs };
+        }
+    }
 
     return {
         id: scraped.id,
@@ -164,8 +252,8 @@ function transformProduct(scraped: ScrapedProduct): ChatbotProduct | null {
         image: scraped.image,
         stock: scraped.stock !== false, // Default to true/in-stock
         last_scraped: scraped.last_scraped || new Date().toISOString(),
-        specs,
-        use_cases: scraped.use_cases?.length ? scraped.use_cases : inferUseCases(category, specs),
+        specs: mergedSpecs,
+        use_cases: scraped.use_cases?.length ? scraped.use_cases : inferUseCases(category, mergedSpecs),
         performance_tier: inferPerformanceTier(scraped.price),
     };
 }
@@ -191,7 +279,7 @@ async function readJsonlProducts(filePath: string): Promise<ScrapedProduct[]> {
         try {
             const product = JSON.parse(line);
             products.push(product);
-        } catch (err) {
+        } catch {
             console.error(`Failed to parse line: ${line.substring(0, 100)}...`);
         }
     }
@@ -206,25 +294,45 @@ async function main() {
     console.log('🔄 SpecGen Data Sync');
     console.log('====================\n');
 
-    // Check source files exist
-    console.log(`📁 Source JSONL: ${PRODUCTS_JSONL}`);
-    if (!fs.existsSync(PRODUCTS_JSONL)) {
-        console.error('❌ Source JSONL file not found!');
-        console.error('   Run the scraper first: cd ../specgen-scraper && python src/main.py --site amazon --output data/raw/amazon_gpu.jsonl');
+    // Discover product files
+    const productFiles = fs
+        .readdirSync(SCRAPER_DATA_DIR)
+        .filter((f) => f.startsWith("products_") && f.endsWith(".jsonl"))
+        .sort();
+
+    console.log(`📁 Scraper data dir: ${SCRAPER_DATA_DIR}`);
+    console.log(`📄 Product files: ${productFiles.length ? productFiles.join(", ") : "(none)"}`);
+
+    if (productFiles.length === 0) {
+        console.error('❌ No products_*.jsonl files found!');
+        console.error('   Run the scraper+merge first: cd ../specgen-scraper && python src/main.py --all');
         process.exit(1);
     }
 
     // Read and transform products
     console.log('\n📖 Reading scraped products...');
-    const scrapedProducts = await readJsonlProducts(PRODUCTS_JSONL);
-    console.log(`   Found ${scrapedProducts.length} raw products`);
+    const scrapedProducts: ScrapedProduct[] = [];
+    for (const filename of productFiles) {
+        const filePath = path.join(SCRAPER_DATA_DIR, filename);
+        const fileProducts = await readJsonlProducts(filePath);
+        scrapedProducts.push(...fileProducts);
+        console.log(`   - ${filename}: ${fileProducts.length}`);
+    }
+    console.log(`   Total raw products: ${scrapedProducts.length}`);
+
+    // Load canonical reference specs (optional but recommended)
+    const referenceSpecs = {
+        gpu: loadReferenceSpecsMap(REFERENCE_SPECS_GPU),
+        cpu: loadReferenceSpecsMap(REFERENCE_SPECS_CPU),
+    };
+    console.log(`\n📚 Loaded reference specs: GPU=${referenceSpecs.gpu.size}, CPU=${referenceSpecs.cpu.size}`);
 
     console.log('\n🔧 Transforming products...');
     const transformedProducts: ChatbotProduct[] = [];
     let skipped = 0;
 
     for (const scraped of scrapedProducts) {
-        const transformed = transformProduct(scraped);
+        const transformed = transformProduct(scraped, referenceSpecs);
         if (transformed) {
             transformedProducts.push(transformed);
         } else {
@@ -246,6 +354,7 @@ async function main() {
 
     // Write output
     console.log(`\n💾 Writing ${OUTPUT_PRODUCTS}...`);
+    fs.mkdirSync(CHATBOT_DATA_DIR, { recursive: true });
     fs.writeFileSync(OUTPUT_PRODUCTS, JSON.stringify(uniqueProducts, null, 2));
     console.log(`   ✓ Wrote ${uniqueProducts.length} products`);
 
@@ -262,6 +371,8 @@ async function main() {
     console.log('\n✅ Sync complete!');
     console.log(`   Products: ${uniqueProducts.length}`);
     console.log(`   Output: ${OUTPUT_PRODUCTS}`);
+    console.log('\nNext steps (recommended):');
+    console.log('   - bun run generate-embeddings   (embeddings from enriched products.json)');
 }
 
 main().catch((err) => {

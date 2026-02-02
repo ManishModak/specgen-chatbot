@@ -1,4 +1,4 @@
-import { Product, ProductEmbedding } from "./products";
+import { Product } from "./products";
 import productsData from "../../data/products.json";
 import embeddingsData from "../../data/embeddings.json";
 
@@ -127,6 +127,52 @@ export function getProductById(id: string): Product | undefined {
     return products.find((p) => p.id === id);
 }
 
+function _stringifySpecValue(value: unknown): string {
+    if (value === null || value === undefined) return "";
+    if (Array.isArray(value)) return value.map(_stringifySpecValue).filter(Boolean).join(" / ");
+    if (typeof value === "object") return JSON.stringify(value);
+    return String(value);
+}
+
+function _pickKeySpecs(product: Product, max: number = 5): string {
+    const specs = (product.specs || {}) as Record<string, unknown>;
+
+    const priorityByCategory: Record<string, string[]> = {
+        GPU: ["chipset", "architecture", "vram", "vram_variants", "memory_type", "memory_bus_bit", "tdp_w"],
+        CPU: ["architecture", "cores", "threads", "p_cores", "e_cores", "base_clock", "boost_clock", "socket", "cache_l3_mb", "tdp_w"],
+        RAM: ["capacity", "type", "speed", "latency", "rgb"],
+        Motherboard: ["chipset", "socket", "form_factor", "wifi", "ram_slots", "max_ram"],
+        Storage: ["capacity", "interface", "read_speed", "write_speed"],
+        PSU: ["wattage", "efficiency", "modular"],
+        Case: ["max_gpu_length_mm", "max_cooler_height_mm", "color"],
+        "CPU Cooler": ["tdp_rating", "height_mm", "fans", "socket_support"],
+    };
+
+    const ignoredKeys = new Set(["registry_id", "registry_family", "search_term"]);
+    const priorityKeys = priorityByCategory[product.category] || [];
+
+    const picked: Array<[string, unknown]> = [];
+    const seen = new Set<string>();
+
+    for (const key of priorityKeys) {
+        if (picked.length >= max) break;
+        const value = specs[key];
+        if (value === undefined || value === null) continue;
+        picked.push([key, value]);
+        seen.add(key);
+    }
+
+    for (const [key, value] of Object.entries(specs)) {
+        if (picked.length >= max) break;
+        if (seen.has(key) || ignoredKeys.has(key)) continue;
+        if (value === undefined || value === null) continue;
+        picked.push([key, value]);
+    }
+
+    if (picked.length === 0) return "None";
+    return picked.map(([k, v]) => `${k}: ${_stringifySpecValue(v)}`).join(", ");
+}
+
 /**
  * Format products as context for the LLM
  */
@@ -147,7 +193,7 @@ export function formatProductsAsContext(products: Product[]): string {
   Price: ${price} @ ${p.retailer}
   Stock: ${p.stock !== false ? "In Stock ✓" : "Out of Stock ✗"}
   Use Cases: ${p.use_cases?.join(", ") || "General use"}
-  Key Specs: ${Object.entries(p.specs).slice(0, 3).map(([k, v]) => `${k}: ${v}`).join(", ")}`;
+  Key Specs: ${_pickKeySpecs(p)}`;
         })
         .join("\n\n");
 }
