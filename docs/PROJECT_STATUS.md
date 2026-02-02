@@ -1,6 +1,6 @@
 # Project Status Log
 
-> **Last Updated:** 2026-02-02 13:58 IST
+> **Last Updated:** 2026-02-02 14:30 IST
 
 This document tracks the progress of the SpecGen Chatbot development.
 
@@ -16,7 +16,27 @@ This document tracks the progress of the SpecGen Chatbot development.
 
 ## Progress Log
 
-### 2026-02-02
+### 2026-02-02 (Afternoon Session)
+
+| Time | Task | Status |
+|------|------|--------|
+| 14:00 | Scraper-Chatbot Integration Planning | ✅ Done |
+| 14:05 | Created `sync-data.ts` script for JSONL→JSON transformation | ✅ Done |
+| 14:10 | Added npm script `npm run sync-data` | ✅ Done |
+| 14:12 | Updated `products.ts` types for optional fields | ✅ Done |
+| 14:15 | Updated `search.ts` to handle missing fields gracefully | ✅ Done |
+| 14:18 | Ran sync: Transformed 583 scraped → 535 valid products | ✅ Done |
+| 14:20 | Fixed category detection (GPU vs RAM misclassification) | ✅ Done |
+| 14:25 | Copied embeddings from scraper | ✅ Done |
+| 14:30 | Dev server running with live data | ✅ Running |
+
+**Key Changes:**
+- **Data Sync Script**: `scripts/sync-data.ts` transforms JSONL from scraper to JSON for chatbot
+- **Smart Category Detection**: Uses product name + specs to correctly identify GPUs
+- **Use Cases Inference**: Automatically infers use cases (gaming, 4K, AI/ML) from VRAM
+- **Performance Tier**: Auto-calculates budget/mid-range/high-end from price
+
+### 2026-02-02 (Morning Session)
 
 | Time | Task | Status |
 |------|------|--------|
@@ -58,9 +78,22 @@ This document tracks the progress of the SpecGen Chatbot development.
 
 - [x] **Day 5:** Project init, design system, page skeletons
 - [x] **Day 6:** RAG implementation (vector search + chat loop) ✅
+- [x] **Day 6.5:** Scraper Integration (live data pipeline) ✅ **NEW**
 - [ ] **Day 7:** "Roast & Fix" feature
 - [ ] **Day 8:** Tool calling + generative UI (product cards)
 - [ ] **Day 9:** Demo video + Devpost submission
+
+---
+
+## Live Data Statistics
+
+| Metric | Value |
+|--------|-------|
+| **Total Products** | 535 |
+| **Categories** | GPU |
+| **Sources** | Amazon India |
+| **Embeddings** | 768 dimensions (Gemini) |
+| **Price Range** | ₹5,000 - ₹2,50,000+ |
 
 ---
 
@@ -68,26 +101,46 @@ This document tracks the progress of the SpecGen Chatbot development.
 
 | Blocker | Owner | Status |
 |---------|-------|--------|
-| `products.json` from scraper | Friend | ✅ Using mock data (10 products) |
+| `products.json` from scraper | Friend | ✅ **LIVE** (535 products from Amazon) |
 | `embeddings.json` from scraper | Friend | ✅ Generated with Gemini API |
 | Gemini API key | You | ✅ Configured in `.env.local` |
+| Scraper-Chatbot sync | Both | ✅ `npm run sync-data` script ready |
 
 ---
 
 ## Technical Notes
+
+### Data Pipeline (NEW)
+```
+specgen-scraper                    specgen-chatbot
+─────────────────                  ─────────────────
+python src/main.py                      │
+    ↓                                   │
+data/products_gpu.jsonl ──────────────→ npm run sync-data
+                                        ↓
+                              data/products.json (535 products)
+                              data/embeddings.json (768-dim vectors)
+                                        ↓
+                              RAG Search → Gemini Chat Response
+```
 
 ### RAG Architecture
 ```
 User Query → Gemini Embedding (768-dim) → Cosine Similarity Search → Top 5 Products → LLM Context → Response
 ```
 
-### Key Files Modified
-- `src/app/api/chat/route.ts` - Chat API with RAG pipeline
-- `src/lib/search.ts` - Vector search implementation
-- `scripts/generate-embeddings.ts` - Embedding generation script
-- `data/embeddings.json` - 768-dimensional product vectors
+### Key Files
+| File | Purpose |
+|------|---------|
+| `scripts/sync-data.ts` | Transforms JSONL from scraper to JSON |
+| `scripts/generate-embeddings.ts` | Generates embeddings using Gemini |
+| `src/lib/search.ts` | Vector search + keyword fallback |
+| `src/lib/products.ts` | TypeScript types for products |
+| `src/app/api/chat/route.ts` | Chat API with RAG pipeline |
 
 ### Known Considerations
 - Using **AI SDK v6** which requires `toUIMessageStreamResponse()` for `useChat` compatibility
 - Message format from `useChat` uses `parts` array, not `content` string
 - Vector search falls back to keyword search if embedding fails
+- Category detection uses product name + specs (not just category field)
+
