@@ -115,15 +115,63 @@ export default function ChatPage() {
             <Conversation className="flex-1">
                 <ConversationContent className="mx-auto max-w-3xl pb-32">
                     {messages.length === 0 ? (
-                        <ConversationEmptyState
-                            title={mode === "build" ? "PC Architect" : "Roast Master"}
-                            description={
-                                mode === "build"
-                                    ? "Tell me your budget and what games you play (e.g. '₹80k for GTA 6')"
-                                    : "Paste your PCPartPicker list or specs here. I'll destroy it."
-                            }
-                            icon={<MessageSquareIcon className="size-12 opacity-50" />}
-                        />
+                        <div className="flex flex-col items-center justify-center h-full py-12">
+                            <ConversationEmptyState
+                                title={mode === "build" ? "PC Architect" : "🔥 Roast Master"}
+                                description={
+                                    mode === "build"
+                                        ? "Tell me your budget and what games you play (e.g. '₹80k for GTA 6')"
+                                        : "Paste your build specs below. I'll tear it apart."
+                                }
+                                icon={<MessageSquareIcon className="size-12 opacity-50" />}
+                            />
+
+                            {/* Example Prompts */}
+                            <div className="mt-8 w-full max-w-xl px-4">
+                                <p className="text-xs text-muted-foreground text-center mb-3">
+                                    {mode === "build" ? "Try asking:" : "Try these examples:"}
+                                </p>
+                                <div className="grid gap-2">
+                                    {mode === "roast" ? (
+                                        <>
+                                            <button
+                                                onClick={() => setInputValue("Rate my build: Ryzen 5 7600, RTX 4060, 32GB DDR5, B650 Tomahawk, 450W PSU")}
+                                                className="text-left text-sm px-4 py-3 rounded-lg border border-orange-500/30 bg-orange-500/5 text-orange-200 hover:bg-orange-500/10 transition-colors"
+                                            >
+                                                🔥 Ryzen 5 7600 + RTX 4060 + <strong>450W PSU</strong> (weak PSU)
+                                            </button>
+                                            <button
+                                                onClick={() => setInputValue("Roast this: Intel i5-14400F with B650 motherboard, RTX 4060 Ti, 16GB DDR5")}
+                                                className="text-left text-sm px-4 py-3 rounded-lg border border-orange-500/30 bg-orange-500/5 text-orange-200 hover:bg-orange-500/10 transition-colors"
+                                            >
+                                                🔥 i5-14400F + <strong>B650 motherboard</strong> (socket mismatch!)
+                                            </button>
+                                            <button
+                                                onClick={() => setInputValue("Check my build: Ryzen 5 7600, RTX 4060, 32GB Trident Z5, B650 Tomahawk, 750W Corsair RM, Lancool II Mesh, WD SN770 1TB, AK620 cooler")}
+                                                className="text-left text-sm px-4 py-3 rounded-lg border border-orange-500/30 bg-orange-500/5 text-orange-200 hover:bg-orange-500/10 transition-colors"
+                                            >
+                                                ✅ Complete balanced build (let me find issues!)
+                                            </button>
+                                        </>
+                                    ) : (
+                                        <>
+                                            <button
+                                                onClick={() => setInputValue("I have ₹80,000 budget for a gaming PC. I play GTA, Valorant and some Blender work.")}
+                                                className="text-left text-sm px-4 py-3 rounded-lg border border-primary/30 bg-primary/5 text-primary/80 hover:bg-primary/10 transition-colors"
+                                            >
+                                                ₹80k gaming + Blender build
+                                            </button>
+                                            <button
+                                                onClick={() => setInputValue("What's the best GPU under ₹30,000 for 1080p gaming?")}
+                                                className="text-left text-sm px-4 py-3 rounded-lg border border-primary/30 bg-primary/5 text-primary/80 hover:bg-primary/10 transition-colors"
+                                            >
+                                                Best GPU under ₹30k
+                                            </button>
+                                        </>
+                                    )}
+                                </div>
+                            </div>
+                        </div>
                     ) : (
                         messages.map((message) => (
                             <Message key={message.id} from={message.role}>

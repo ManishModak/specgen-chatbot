@@ -1,6 +1,8 @@
 import { google } from "@ai-sdk/google";
 import { streamText, embed } from "ai";
 import { keywordSearch, vectorSearch, getAllProducts, formatProductsAsContext } from "@/lib/search";
+import { parseBuildList, formatParsedBuild } from "@/lib/build-parser";
+import { analyzeBuild, formatAnalysisAsContext } from "@/lib/build-analyzer";
 
 // Allow streaming responses up to 30 seconds
 export const maxDuration = 30;
@@ -58,6 +60,27 @@ export async function POST(req: Request) {
     const productContext = formatProductsAsContext(finalContextProducts);
     console.log(`[RAG] Context size: ${productContext.length} characters`);
 
+    // === ROAST MODE: Parse and Analyze Build ===
+    let buildAnalysisContext = "";
+    if (mode === "roast") {
+        console.log("[ROAST] Parsing user build list...");
+        const parsedBuild = parseBuildList(userQuery);
+        console.log(`[ROAST] Detected ${parsedBuild.components.length} components`);
+
+        if (parsedBuild.components.length > 0) {
+            const analysis = analyzeBuild(parsedBuild);
+            console.log(`[ROAST] Analysis score: ${analysis.overallScore}/100`);
+            console.log(`[ROAST] Issues found: ${analysis.issues.length}`);
+
+            buildAnalysisContext = `
+BUILD ANALYSIS (Pre-computed by system):
+${formatParsedBuild(parsedBuild)}
+
+${formatAnalysisAsContext(analysis)}
+`;
+        }
+    }
+
     // Define System Prompt based on Mode
     const baseSystemPrompt = `You are SpecGen, an expert PC builder and hardware consultant for the Indian market.
 You are helpful, witty, and extremely knowledgeable about computer parts.
@@ -78,10 +101,16 @@ ${productContext}
         modePrompt = `
 CURRENT MODE: ROAST MASTER 🔥
 - Your personality is sarcastic, critical, and "tough love".
-- The user has provided a build or is asking for feedback.
-- Aggressively analyze their choices for bottlenecks, overspending, or bad value.
-- If they picked a bad part, roast them (playfully) and suggest the better alternative from the Context.
-- Example: "You paired a 4090 with a 450W PSU? Do you like fireworks? Buy this 850W Corsair unit instead."
+- The user has provided a build for you to critique.
+- Use the BUILD ANALYSIS section below - it contains pre-computed issues detected in their build.
+- For each issue, ROAST them playfully but helpfully, then suggest the better alternative.
+- Be savage but constructive. Make it entertaining!
+- Example roasts:
+  - "A 450W PSU with that GPU? Bold move. Hope you like the smell of burning electronics."
+  - "Socket mismatch? Did you just pick parts by vibes? Let me help you..."
+  - "CPU bottleneck detected. Your GPU is basically on vacation while your CPU sweats."
+
+${buildAnalysisContext}
 `;
     } else {
         modePrompt = `
