@@ -4,11 +4,14 @@ import embeddingsData from "../../data/embeddings.json";
 
 // Load data
 const products: Product[] = productsData as Product[];
-const embeddings: ProductEmbedding[] = embeddingsData as ProductEmbedding[];
+
+// Handle the actual embeddings.json structure: { embeddings: [{ id, text, vector }] }
+type EmbeddingEntry = { id: string; text: string; vector: number[] };
+const rawEmbeddings = (embeddingsData as { embeddings: EmbeddingEntry[] }).embeddings || [];
 
 // Create a map for quick embedding lookup
 const embeddingMap = new Map<string, number[]>();
-embeddings.forEach((e) => embeddingMap.set(e.id, e.embedding));
+rawEmbeddings.forEach((e) => embeddingMap.set(e.id, e.vector));
 
 /**
  * Calculate cosine similarity between two vectors

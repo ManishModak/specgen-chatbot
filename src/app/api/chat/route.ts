@@ -1,27 +1,62 @@
 import { google } from "@ai-sdk/google";
-import { streamText } from "ai";
-import { keywordSearch, getAllProducts, formatProductsAsContext } from "@/lib/search";
+import { streamText, embed } from "ai";
+import { keywordSearch, vectorSearch, getAllProducts, formatProductsAsContext } from "@/lib/search";
 
 // Allow streaming responses up to 30 seconds
 export const maxDuration = 30;
 
+/**
+ * Generate embedding for user query using Gemini
+ */
+async function embedQuery(query: string): Promise<number[] | null> {
+    try {
+        const { embedding } = await embed({
+            model: google.textEmbeddingModel("text-embedding-004"),
+            value: query,
+        });
+        return embedding;
+    } catch (error) {
+        console.error("Embedding generation failed:", error);
+        return null;
+    }
+}
+
 export async function POST(req: Request) {
+    console.log("\n========== [API] New Chat Request ==========");
+
     const { messages, mode } = await req.json();
+    console.log(`[API] Mode: ${mode}`);
+    console.log(`[API] Messages count: ${messages.length}`);
 
     // Get the last user message
     const lastUserMessage = messages[messages.length - 1];
     const userQuery = lastUserMessage.content;
+    console.log(`[API] User query: "${userQuery}"`);
 
-    // RAG Step 1: Retrieve context
-    // For small dataset (10 items), we can just use keyword search or even all items
-    // In production with thousands of items, we would use vector search here
-    const searchResults = keywordSearch(userQuery);
+    // RAG Step 1: Generate query embedding and perform vector search
+    console.log("[RAG] Starting embedding generation...");
+    let searchResults;
+    const queryEmbedding = await embedQuery(userQuery);
 
-    // If no results from keyword search, fallback to all products (since we only have 10)
-    // This ensures the bot always has data to talk about in this demo
+    if (queryEmbedding) {
+        console.log(`[RAG] Embedding generated: ${queryEmbedding.length} dimensions`);
+        // Use semantic vector search
+        searchResults = vectorSearch(queryEmbedding, 5);
+        console.log(`[RAG] Vector search returned ${searchResults.length} results:`);
+        searchResults.forEach((p, i) => console.log(`  ${i + 1}. ${p.name} - ₹${p.price}`));
+    } else {
+        // Fallback to keyword search
+        console.log("[RAG] Embedding failed, falling back to keyword search");
+        searchResults = keywordSearch(userQuery, 5);
+        console.log(`[RAG] Keyword search returned ${searchResults.length} results`);
+    }
+
+    // If no results, fallback to all products (since we only have 10)
     const finalContextProducts = searchResults.length > 0 ? searchResults : getAllProducts();
+    console.log(`[RAG] Final context: ${finalContextProducts.length} products`);
 
     const productContext = formatProductsAsContext(finalContextProducts);
+    console.log(`[RAG] Context size: ${productContext.length} characters`);
 
     // Define System Prompt based on Mode
     const baseSystemPrompt = `You are SpecGen, an expert PC builder and hardware consultant for the Indian market.
@@ -60,25 +95,60 @@ CURRENT MODE: PC ARCHITECT 🔨
     }
 
     const systemPrompt = `${baseSystemPrompt}\n${modePrompt}`;
+    console.log(`[API] System prompt size: ${systemPrompt.length} characters`);
 
     // Check for API Key
     if (!process.env.GOOGLE_GENERATIVE_AI_API_KEY) {
+        console.error("[API] ERROR: Missing API key!");
         return new Response("Missing GOOGLE_GENERATIVE_AI_API_KEY in .env.local", { status: 500 });
     }
+    console.log("[API] API key found ✓");
 
     try {
-        const result = streamText({
-            model: google("gemini-1.5-pro-latest"),
-            messages: messages.map((m: any) => ({
+        console.log("[API] Calling Gemini gemini-2.5-flash...");
+
+        // Helper to extract text content from message (handles both content string and parts array)
+        const getMessageContent = (m: any): string => {
+            if (typeof m.content === 'string') {
+                return m.content;
+            }
+            // Handle parts array format from useChat with UIMessageStream
+            if (m.parts && Array.isArray(m.parts)) {
+                return m.parts
+                    .filter((p: any) => p.type === 'text')
+                    .map((p: any) => p.text)
+                    .join('');
+            }
+            return '';
+        };
+
+        // Filter out messages with empty content
+        const validMessages = messages
+            .map((m: any) => ({
                 role: m.role,
-                content: m.content
-            })),
+                content: getMessageContent(m)
+            }))
+            .filter((m: any) => m.content.length > 0);
+
+        console.log(`[API] Valid messages: ${validMessages.length}`);
+
+        const result = streamText({
+            model: google("gemini-2.5-flash"),
+            messages: validMessages,
             system: systemPrompt,
+            onFinish: ({ text, usage }) => {
+                console.log(`[API] Response complete!`);
+                console.log(`[API] Response length: ${text.length} chars`);
+                console.log(`[API] Tokens used: ${JSON.stringify(usage)}`);
+                console.log(`[API] First 200 chars: ${text.substring(0, 200)}...`);
+            }
         });
 
-        return result.toTextStreamResponse();
+        console.log("[API] Streaming response to client...");
+        return result.toUIMessageStreamResponse();
     } catch (error) {
-        console.error("Gemini API Error:", error);
+        console.error("[API] Gemini API Error:", error);
         return new Response("Error communicating with AI service.", { status: 500 });
     }
 }
+
