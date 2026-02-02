@@ -42,7 +42,8 @@ export function keywordSearch(query: string, limit: number = 10): Product[] {
 
     const scored = products.map((product) => {
         let score = 0;
-        const searchText = `${product.name} ${product.normalized_name} ${product.category} ${product.brand} ${product.use_cases.join(" ")}`.toLowerCase();
+        const useCasesText = product.use_cases?.join(" ") || "";
+        const searchText = `${product.name} ${product.normalized_name} ${product.category} ${product.brand} ${useCasesText}`.toLowerCase();
 
         // Check each query term
         for (const term of queryTerms) {
@@ -144,8 +145,8 @@ export function formatProductsAsContext(products: Product[]): string {
 
             return `- **${p.name}** (${p.category})
   Price: ${price} @ ${p.retailer}
-  Stock: ${p.stock ? "In Stock ✓" : "Out of Stock ✗"}
-  Use Cases: ${p.use_cases.join(", ")}
+  Stock: ${p.stock !== false ? "In Stock ✓" : "Out of Stock ✗"}
+  Use Cases: ${p.use_cases?.join(", ") || "General use"}
   Key Specs: ${Object.entries(p.specs).slice(0, 3).map(([k, v]) => `${k}: ${v}`).join(", ")}`;
         })
         .join("\n\n");

@@ -6,7 +6,8 @@
     "dev": "next dev",
     "build": "next build",
     "start": "next start",
-    "lint": "eslint"
+    "lint": "eslint",
+    "sync-data": "tsx scripts/sync-data.ts"
   },
   "dependencies": {
     "@ai-sdk/google": "^3.0.13",

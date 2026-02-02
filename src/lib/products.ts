@@ -61,11 +61,12 @@ export interface Product {
     currency: "INR";
     retailer: string;
     url: string;
-    stock: boolean;
+    image?: string;  // Product image from retailer
+    stock?: boolean; // Default to true if undefined
     last_scraped: string;
     specs: ProductSpecs;
-    use_cases: string[];
-    performance_tier: "budget" | "mid-range" | "high-end";
+    use_cases?: string[];  // May be empty from scraped data
+    performance_tier?: "budget" | "mid-range" | "high-end";  // Inferred from price if missing
 }
 
 export interface ProductEmbedding {
