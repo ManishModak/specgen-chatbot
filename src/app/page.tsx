@@ -56,6 +56,10 @@ export default function LandingPage() {
                 View Gallery
               </Button>
             </div>
+
+            <p className="mt-8 text-sm text-muted-foreground/60">
+              Powered by <span className="font-semibold text-primary">Gemini 3 API</span>
+            </p>
           </div>
         </section>
 
