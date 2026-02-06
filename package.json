@@ -3,6 +3,7 @@
   "version": "0.1.0",
   "private": true,
   "scripts": {
+    "predev": "npx tsx scripts/sync-data.ts",
     "dev": "next dev",
     "build": "next build",
     "start": "next start",

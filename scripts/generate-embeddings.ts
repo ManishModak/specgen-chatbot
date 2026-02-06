@@ -8,7 +8,19 @@ import { GoogleGenerativeAI } from "@google/generative-ai";
 import * as fs from "fs";
 import * as path from "path";
 
-// Load environment variables
+// Load environment variables from .env.local
+const envPath = path.join(__dirname, "..", ".env.local");
+if (fs.existsSync(envPath)) {
+    const envContent = fs.readFileSync(envPath, "utf-8");
+    for (const line of envContent.split("\n")) {
+        const match = line.match(/^([^=]+)=(.*)$/);
+        if (match) {
+            const [, key, value] = match;
+            process.env[key.trim()] = value.trim();
+        }
+    }
+}
+
 const API_KEY = process.env.GOOGLE_GENERATIVE_AI_API_KEY;
 
 if (!API_KEY) {

@@ -1,6 +1,8 @@
 "use client";
 
+import { useState, useEffect, useMemo } from "react";
 import { useChat } from "@ai-sdk/react";
+import { DefaultChatTransport } from "ai";
 import {
     Conversation,
     ConversationContent,
@@ -20,7 +22,6 @@ import {
 } from "@/components/ai-elements/prompt-input";
 import { Loader } from "@/components/ai-elements/loader";
 import { MessageSquareIcon, ArrowLeftIcon } from "lucide-react";
-import { useState } from "react";
 import Link from "next/link";
 import { Button } from "@/components/ui/button";
 import { ModeToggle } from "@/components/mode-toggle";
@@ -30,63 +31,97 @@ import { Product } from "@/lib/products";
 export default function ChatPage() {
     const [inputValue, setInputValue] = useState("");
     const [mode, setMode] = useState<"build" | "roast">("build");
+    const [productsMap, setProductsMap] = useState<Map<string, Product>>(new Map());
+
+    // Load products on mount
+    useEffect(() => {
+        fetch("/api/products")
+            .then(res => res.json())
+            .then((products: Product[]) => {
+                const map = new Map<string, Product>();
+                products.forEach(p => map.set(p.id, p));
+                setProductsMap(map);
+                console.log(`[Client] Loaded ${map.size} products`);
+            })
+            .catch(err => console.error("Failed to load products:", err));
+    }, []);
+
+    // Create transport that includes mode in body
+    const transport = useMemo(() => new DefaultChatTransport({
+        api: "/api/chat",
+        body: { mode },
+    }), [mode]);
 
     const { messages, sendMessage, status, stop, setMessages } = useChat({
-        api: "/api/chat",
-        body: { mode }, // Send current mode to backend
-        onFinish: (message) => {
-            // Handle any client-side logic after message completion
-        }
+        id: "specgen-chat",
+        transport,
     });
 
     const isLoading = status === "streaming" || status === "submitted";
 
-    const handleSubmit = async (msg: { text: string }) => {
-        if (!msg.text.trim()) return;
-        setInputValue("");
-        await sendMessage({ content: msg.text, role: "user" });
+    // Parse [[PRODUCT:id]] tags and convert to segments
+    const parseProductTags = (text: string): Array<{ type: 'text' | 'product', content: string }> => {
+        const regex = /\[\[PRODUCT:([^\]]+)\]\]/g;
+        const segments: Array<{ type: 'text' | 'product', content: string }> = [];
+        let lastIndex = 0;
+        let match;
+
+        while ((match = regex.exec(text)) !== null) {
+            if (match.index > lastIndex) {
+                segments.push({ type: 'text', content: text.slice(lastIndex, match.index) });
+            }
+            segments.push({ type: 'product', content: match[1] });
+            lastIndex = regex.lastIndex;
+        }
+
+        if (lastIndex < text.length) {
+            segments.push({ type: 'text', content: text.slice(lastIndex) });
+        }
+
+        return segments.length > 0 ? segments : [{ type: 'text', content: text }];
     };
 
-    // Helper to get text content from message parts
-    const getMessageText = (message: typeof messages[0]) => {
+    // Get message text content
+    const getMessageText = (message: typeof messages[0]): string => {
         if (message.parts) {
             return message.parts
-                .filter((part): part is { type: "text"; text: string } => part.type === "text")
-                .map((part) => part.text)
+                .filter((p): p is { type: "text"; text: string } => p.type === "text")
+                .map(p => p.text)
                 .join("");
         }
-        return message.content;
+        return "";
     };
 
-    // Helper to identify if a message contains tool invocations (products)
-    // For now, we'll look for tool invocations if we implement them, 
-    // or checks validation results.
+    // Render message content with product cards
     const renderMessageContent = (message: typeof messages[0]) => {
-        // If we have tool invocations (future proofing)
-        if (message.toolInvocations?.length) {
-            return (
-                <div className="space-y-4">
-                    {message.toolInvocations.map((toolInvocation) => {
-                        if (toolInvocation.toolName === 'show_products' && toolInvocation.state === 'result') {
-                            const products = toolInvocation.result as Product[];
-                            return (
-                                <div key={toolInvocation.toolCallId} className="grid gap-4 sm:grid-cols-2">
-                                    {products.map(p => <ProductCard key={p.id} product={p} />)}
-                                </div>
-                            );
-                        }
-                        return null;
-                    })}
-                </div>
-            );
+        const text = getMessageText(message);
+
+        if (message.role === "user") {
+            return <p className="whitespace-pre-wrap">{text}</p>;
         }
 
-        // Default text rendering
-        const text = getMessageText(message);
-        return message.role === "user" ? (
-            <p className="whitespace-pre-wrap">{text}</p>
-        ) : (
-            <MessageResponse>{text}</MessageResponse>
+        const segments = parseProductTags(text);
+        const hasProducts = segments.some(s => s.type === 'product');
+
+        if (!hasProducts) {
+            return <MessageResponse>{text}</MessageResponse>;
+        }
+
+        return (
+            <div className="space-y-4">
+                {segments.map((segment, i) => {
+                    if (segment.type === 'text' && segment.content.trim()) {
+                        return <MessageResponse key={i}>{segment.content}</MessageResponse>;
+                    } else if (segment.type === 'product') {
+                        const product = productsMap.get(segment.content);
+                        if (product) {
+                            return <ProductCard key={i} product={product} compact />;
+                        }
+                        return null;
+                    }
+                    return null;
+                })}
+            </div>
         );
     };
 
@@ -146,12 +181,6 @@ export default function ChatPage() {
                                             >
                                                 🔥 i5-14400F + <strong>B650 motherboard</strong> (socket mismatch!)
                                             </button>
-                                            <button
-                                                onClick={() => setInputValue("Check my build: Ryzen 5 7600, RTX 4060, 32GB Trident Z5, B650 Tomahawk, 750W Corsair RM, Lancool II Mesh, WD SN770 1TB, AK620 cooler")}
-                                                className="text-left text-sm px-4 py-3 rounded-lg border border-orange-500/30 bg-orange-500/5 text-orange-200 hover:bg-orange-500/10 transition-colors"
-                                            >
-                                                ✅ Complete balanced build (let me find issues!)
-                                            </button>
                                         </>
                                     ) : (
                                         <>
@@ -199,7 +228,12 @@ export default function ChatPage() {
             {/* Input Area */}
             <div className="border-t border-border/40 bg-background/95 p-4 backdrop-blur supports-[backdrop-filter]:bg-background/60">
                 <div className="mx-auto max-w-3xl">
-                    <PromptInput onSubmit={handleSubmit}>
+                    <PromptInput onSubmit={() => {
+                        if (inputValue.trim()) {
+                            sendMessage({ text: inputValue });
+                            setInputValue("");
+                        }
+                    }}>
                         <PromptInputTextarea
                             placeholder={mode === "build" ? "I want a gaming PC for..." : "Rate my build: Ryzen 5 7600..."}
                             value={inputValue}

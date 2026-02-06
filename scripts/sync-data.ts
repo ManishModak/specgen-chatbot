@@ -149,29 +149,50 @@ function inferUseCases(category: string, specs: Record<string, unknown>): string
 }
 
 /**
- * Normalize category name - uses multiple signals for accuracy
+ * Normalize category name - uses source filename as primary signal
  */
-function normalizeCategory(category: string | undefined, name: string, specs: Record<string, unknown>): Category | null {
+function normalizeCategory(
+    category: string | undefined,
+    name: string,
+    specs: Record<string, unknown>,
+    sourceFile?: string
+): Category | null {
+    // PRIMARY: Use source filename - the scraper already categorized these!
+    if (sourceFile) {
+        const filename = sourceFile.toLowerCase();
+        if (filename.includes('products_gpu')) return 'GPU';
+        if (filename.includes('products_cpu')) return 'CPU';
+        if (filename.includes('products_ram')) return 'RAM';
+        if (filename.includes('products_motherboard')) return 'Motherboard';
+        if (filename.includes('products_psu')) return 'PSU';
+        if (filename.includes('products_cabinet') || filename.includes('products_case')) return 'Case';
+        if (filename.includes('products_storage')) return 'Storage';
+        if (filename.includes('products_cooler')) return 'CPU Cooler';
+        // Skip invalid products file
+        if (filename.includes('products_invalid')) return null;
+    }
+
+    // FALLBACK: Use category field or name detection
     const cat = (category || '').toLowerCase();
     const nameLower = name.toLowerCase();
     const specsStr = JSON.stringify(specs).toLowerCase();
     const registryId = (_getStringSpec(specs, "registry_id") || "").toLowerCase();
 
-    // Prefer registry-based categorization when available
+    // Registry-based categorization 
     if (registryId) {
         if (registryId.includes(".ryzen_") || registryId.includes(".core_")) return "CPU";
         if (registryId.includes(".rtx_") || registryId.includes(".gtx_") || registryId.includes(".rx_") || registryId.includes(".arc_")) return "GPU";
     }
 
-    // GPU detection - check name and specs for GPU indicators
+    // GPU detection
     const gpuIndicators = ['rtx', 'gtx', 'geforce', 'radeon', 'rx ', 'rx-', 'arc a', 'arc b',
-        'graphics card', 'gpu', 'gddr6', 'gddr5', 'vram', 'gaming graphics'];
+        'graphics card', 'gddr6', 'gddr5', 'vram', 'gaming graphics'];
     if (gpuIndicators.some(ind => nameLower.includes(ind) || specsStr.includes(ind))) {
         return 'GPU';
     }
 
     // CPU detection
-    const cpuIndicators = ['ryzen', 'core i', 'intel core', 'processor', 'threadripper', 'xeon'];
+    const cpuIndicators = ['ryzen', 'core i', 'intel core', 'processor', 'threadripper', 'xeon', 'athlon'];
     if (cpuIndicators.some(ind => nameLower.includes(ind))) {
         return 'CPU';
     }
@@ -181,16 +202,16 @@ function normalizeCategory(category: string | undefined, name: string, specs: Re
         return 'Motherboard';
     }
 
-    // Other categories from explicit category field
+    // Category field detection
     if (cat.includes('cpu') || cat.includes('processor')) return 'CPU';
+    if (cat.includes('gpu') || cat.includes('graphics')) return 'GPU';
     if (cat.includes('motherboard') || cat.includes('mobo') || cat.includes('mainboard')) return 'Motherboard';
-    if (cat.includes('psu') || cat.includes('power')) return 'PSU';
-    if (cat.includes('case') || cat.includes('cabinet')) return 'Case';
+    if (cat.includes('psu') || cat.includes('power supply')) return 'PSU';
+    if (cat.includes('case') || cat.includes('cabinet') || cat.includes('chassis')) return 'Case';
     if (cat.includes('storage') || cat.includes('ssd') || cat.includes('hdd') || cat.includes('nvme')) return 'Storage';
     if (cat.includes('cooler')) return 'CPU Cooler';
-    if (cat.includes('ram') && !gpuIndicators.some(ind => nameLower.includes(ind))) return 'RAM';
+    if (cat.includes('ram') || cat.includes('memory')) return 'RAM';
 
-    // If we cannot confidently infer a supported category, skip.
     return null;
 }
 
@@ -202,7 +223,8 @@ function transformProduct(
     referenceSpecs: {
         gpu: Map<string, Record<string, unknown>>;
         cpu: Map<string, Record<string, unknown>>;
-    }
+    },
+    sourceFile?: string
 ): ChatbotProduct | null {
     // Skip products without essential fields
     if (!scraped.id || !scraped.name) {
@@ -216,7 +238,7 @@ function transformProduct(
     }
 
     const scrapedSpecs = scraped.specs || {};
-    const category = normalizeCategory(scraped.category, scraped.name, scrapedSpecs);
+    const category = normalizeCategory(scraped.category, scraped.name, scrapedSpecs, sourceFile);
     if (!category) return null;
 
     const registryId = _getStringSpec(scrapedSpecs, "registry_id");
@@ -232,8 +254,8 @@ function transformProduct(
     if (registryId) {
         const ref =
             category === "GPU" ? referenceSpecs.gpu.get(registryId)
-            : category === "CPU" ? referenceSpecs.cpu.get(registryId)
-            : undefined;
+                : category === "CPU" ? referenceSpecs.cpu.get(registryId)
+                    : undefined;
         if (ref) {
             mergedSpecs = { ...ref, ...scrapedSpecs };
         }
@@ -309,16 +331,23 @@ async function main() {
         process.exit(1);
     }
 
-    // Read and transform products
+    // Read and transform products (tracking source file for each)
     console.log('\n📖 Reading scraped products...');
-    const scrapedProducts: ScrapedProduct[] = [];
+    interface ProductWithSource {
+        product: ScrapedProduct;
+        sourceFile: string;
+    }
+    const productsWithSource: ProductWithSource[] = [];
+
     for (const filename of productFiles) {
         const filePath = path.join(SCRAPER_DATA_DIR, filename);
         const fileProducts = await readJsonlProducts(filePath);
-        scrapedProducts.push(...fileProducts);
+        for (const product of fileProducts) {
+            productsWithSource.push({ product, sourceFile: filename });
+        }
         console.log(`   - ${filename}: ${fileProducts.length}`);
     }
-    console.log(`   Total raw products: ${scrapedProducts.length}`);
+    console.log(`   Total raw products: ${productsWithSource.length}`);
 
     // Load canonical reference specs (optional but recommended)
     const referenceSpecs = {
@@ -331,8 +360,8 @@ async function main() {
     const transformedProducts: ChatbotProduct[] = [];
     let skipped = 0;
 
-    for (const scraped of scrapedProducts) {
-        const transformed = transformProduct(scraped, referenceSpecs);
+    for (const { product: scraped, sourceFile } of productsWithSource) {
+        const transformed = transformProduct(scraped, referenceSpecs, sourceFile);
         if (transformed) {
             transformedProducts.push(transformed);
         } else {

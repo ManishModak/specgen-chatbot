@@ -40,6 +40,55 @@ export function keywordSearch(query: string, limit: number = 10): Product[] {
     const queryLower = query.toLowerCase();
     const queryTerms = queryLower.split(/\s+/);
 
+    // Detect if this is a PC build query
+    const pcBuildIndicators = ['pc', 'build', 'computer', 'rig', 'setup', 'gaming pc', 'workstation'];
+    const isPcBuildQuery = pcBuildIndicators.some(term => queryLower.includes(term));
+
+    // Parse budget from query
+    let budget: number | null = null;
+    const budgetMatch = query.match(/₹?\s*([\d,]+)\s*k?/i);
+    if (budgetMatch) {
+        budget = parseInt(budgetMatch[1].replace(/,/g, ""));
+        if (queryLower.includes("k") || budget < 1000) {
+            budget = budget * 1000;
+        }
+    }
+
+    // For PC build queries, return diverse products from each category
+    if (isPcBuildQuery && budget) {
+        const categories = ['CPU', 'GPU', 'Motherboard', 'RAM', 'Storage', 'PSU', 'Case', 'CPU Cooler'];
+        const result: Product[] = [];
+
+        for (const category of categories) {
+            // Get products from this category within budget
+            const categoryProducts = products
+                .filter(p => p.category === category && p.stock !== false)
+                .sort((a, b) => {
+                    // Prefer products closer to (but under) a reasonable fraction of budget
+                    const categoryBudget = category === 'GPU' ? budget! * 0.35
+                        : category === 'CPU' ? budget! * 0.25
+                            : category === 'Motherboard' ? budget! * 0.15
+                                : category === 'RAM' ? budget! * 0.10
+                                    : category === 'Storage' ? budget! * 0.08
+                                        : category === 'PSU' ? budget! * 0.08
+                                            : category === 'Case' ? budget! * 0.08
+                                                : budget! * 0.05;
+
+                    const aDistance = Math.abs(a.price - categoryBudget);
+                    const bDistance = Math.abs(b.price - categoryBudget);
+                    return aDistance - bDistance;
+                });
+
+            // Add top product from each category
+            if (categoryProducts.length > 0) {
+                result.push(categoryProducts[0]);
+            }
+        }
+
+        return result.slice(0, limit);
+    }
+
+    // Standard keyword search for non-build queries
     const scored = products.map((product) => {
         let score = 0;
         const useCasesText = product.use_cases?.join(" ") || "";
@@ -60,17 +109,9 @@ export function keywordSearch(query: string, limit: number = 10): Product[] {
             }
         }
 
-        // Budget parsing
-        const budgetMatch = query.match(/₹?\s*([\d,]+)\s*k?/i);
-        if (budgetMatch) {
-            let budget = parseInt(budgetMatch[1].replace(/,/g, ""));
-            if (query.toLowerCase().includes("k") || query.toLowerCase().includes("lakh")) {
-                budget = budget * 1000;
-            }
-            // Score products within budget higher
-            if (product.price <= budget) {
-                score += 1;
-            }
+        // Score products within budget higher
+        if (budget && product.price <= budget) {
+            score += 1;
         }
 
         return { product, score };
