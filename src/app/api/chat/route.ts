@@ -1,4 +1,4 @@
-import { google } from "@ai-sdk/google";
+import { createGoogleGenerativeAI } from "@ai-sdk/google";
 import { streamText, embed } from "ai";
 import { keywordSearch, vectorSearch, getAllProducts, formatProductsAsContext, optimizeResultsForQuery } from "@/lib/search";
 import { parseBuildList, formatParsedBuild } from "@/lib/build-parser";
@@ -19,6 +19,88 @@ interface ApiErrorInfo {
     statusCode: number;
     message: string;
     retryable: boolean;
+}
+
+let apiKeyCursor = 0;
+
+function getApiKeys(): string[] {
+    const keysFromList = (process.env.GOOGLE_GENERATIVE_AI_API_KEYS || "")
+        .split(",")
+        .map((key) => key.trim())
+        .filter(Boolean);
+
+    const singleKey = (process.env.GOOGLE_GENERATIVE_AI_API_KEY || "").trim();
+    const all = [...keysFromList, ...(singleKey ? [singleKey] : [])];
+    return Array.from(new Set(all));
+}
+
+function maskApiKey(apiKey: string): string {
+    if (apiKey.length <= 8) return "****";
+    return `${apiKey.slice(0, 4)}...${apiKey.slice(-4)}`;
+}
+
+function getOrderedApiKeys(): string[] {
+    const keys = getApiKeys();
+    if (keys.length <= 1) return keys;
+
+    const startIndex = apiKeyCursor % keys.length;
+    apiKeyCursor += 1;
+
+    return keys.slice(startIndex).concat(keys.slice(0, startIndex));
+}
+
+function embeddingFingerprint(vector: number[]): string {
+    const preview = vector.slice(0, 12).map((v) => v.toFixed(6)).join("|");
+    let hash = 0;
+    for (let i = 0; i < preview.length; i++) {
+        hash = (hash * 31 + preview.charCodeAt(i)) >>> 0;
+    }
+    return hash.toString(16);
+}
+
+async function embedWithOllama(query: string): Promise<number[] | null> {
+    const baseUrl = (process.env.OLLAMA_BASE_URL || "http://127.0.0.1:11434").replace(/\/$/, "");
+    const model = process.env.OLLAMA_EMBED_MODEL || "nomic-embed-text";
+
+    try {
+        const response = await fetch(`${baseUrl}/api/embeddings`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ model, prompt: query }),
+        });
+
+        if (!response.ok) {
+            const body = await response.text();
+            throw new Error(`Ollama embeddings failed (${response.status}): ${body}`);
+        }
+
+        const payload = await response.json() as { embedding?: number[] };
+        const embedding = payload.embedding;
+        if (!embedding || !Array.isArray(embedding) || embedding.length === 0) {
+            throw new Error("Ollama returned empty embedding");
+        }
+
+        logger.debug("RAG", "Ollama embedding generation succeeded", {
+            provider: "ollama",
+            model,
+            embedding_dims: embedding.length,
+            base_url: baseUrl,
+        });
+
+        logger.trace("RAG", "Query embedding payload", {
+            provider: "ollama",
+            model,
+            query,
+            embedding_dims: embedding.length,
+            embedding_preview: embedding.slice(0, 16),
+            embedding_fingerprint: embeddingFingerprint(embedding),
+        });
+
+        return embedding;
+    } catch (error) {
+        logger.logError(error, "Ollama embedding generation failed");
+        return null;
+    }
 }
 
 function getErrorMessage(error: unknown): string {
@@ -117,30 +199,59 @@ export const maxDuration = 30;
 /**
  * Generate embedding for user query using Gemini
  */
-async function embedQuery(query: string): Promise<number[] | null> {
-    const modelCandidates = ["gemini-embedding-001", "text-embedding-004"];
+async function embedQuery(query: string, apiKeys: string[]): Promise<number[] | null> {
+    const provider = (process.env.EMBED_PROVIDER || "ollama").toLowerCase();
+    if (provider === "ollama") {
+        return embedWithOllama(query);
+    }
+
+    const modelCandidates = ["gemini-embedding-001", "text-embedding-004"] as const;
 
     for (const modelName of modelCandidates) {
-        try {
-            const { embedding } = await embed({
-                model: google.textEmbeddingModel(modelName),
-                value: query,
-            });
+        for (let keyIndex = 0; keyIndex < apiKeys.length; keyIndex++) {
+            const apiKey = apiKeys[keyIndex];
+            const provider = createGoogleGenerativeAI({ apiKey });
 
-            logger.debug("RAG", "Embedding generation succeeded", {
-                model: modelName,
-                embedding_dims: embedding.length,
-            });
+            try {
+                const { embedding } = await embed({
+                    model: provider.textEmbeddingModel(modelName),
+                    value: query,
+                });
 
-            return embedding;
-        } catch (error) {
-            const info = classifyApiError(error);
-            logger.warn("RAG", "Embedding model failed", {
-                model: modelName,
-                error: info.message,
-                error_kind: info.kind,
-                retryable: info.retryable,
-            });
+                logger.debug("RAG", "Embedding generation succeeded", {
+                    model: modelName,
+                    embedding_dims: embedding.length,
+                    api_key: maskApiKey(apiKey),
+                    api_key_index: keyIndex,
+                });
+
+                logger.trace("RAG", "Query embedding payload", {
+                    model: modelName,
+                    query,
+                    embedding_dims: embedding.length,
+                    embedding_preview: embedding.slice(0, 16),
+                    embedding_fingerprint: embeddingFingerprint(embedding),
+                    api_key: maskApiKey(apiKey),
+                });
+
+                return embedding;
+            } catch (error) {
+                const info = classifyApiError(error);
+                logger.warn("RAG", "Embedding model failed", {
+                    model: modelName,
+                    error: info.message,
+                    error_kind: info.kind,
+                    retryable: info.retryable,
+                    api_key: maskApiKey(apiKey),
+                    api_key_index: keyIndex,
+                });
+
+                const hasNextKey = keyIndex < apiKeys.length - 1;
+                const canSwitchKey = info.kind === "quota_exhausted" || info.kind === "rate_limited" || info.kind === "network_error";
+                if (!canSwitchKey || !hasNextKey) {
+                    break;
+                }
+            }
         }
     }
 
@@ -173,31 +284,43 @@ export async function POST(req: Request) {
     const userQuery = getMessageContent(lastUserMessage);
     logger.logRequest(mode, messages, userQuery);
 
+    const orderedApiKeys = getOrderedApiKeys();
+    if (orderedApiKeys.length === 0) {
+        logger.error("API", "Missing API key", {
+            env_var: "GOOGLE_GENERATIVE_AI_API_KEY|GOOGLE_GENERATIVE_AI_API_KEYS",
+        });
+        return new Response("Missing GOOGLE_GENERATIVE_AI_API_KEY or GOOGLE_GENERATIVE_AI_API_KEYS in .env.local", { status: 500 });
+    }
+    logger.info("API", "API key pool loaded", {
+        keys_count: orderedApiKeys.length,
+        keys: orderedApiKeys.map(maskApiKey),
+    });
+
     // RAG Step 1: Generate query embedding and perform vector search
     let searchResults: Product[];
     const ragStart = Date.now();
-    const queryEmbedding = await embedQuery(userQuery);
+    const queryEmbedding = await embedQuery(userQuery, orderedApiKeys);
 
     if (queryEmbedding) {
         // Use semantic vector search
-        searchResults = optimizeResultsForQuery(userQuery, vectorSearch(queryEmbedding, 16), 8);
+        searchResults = optimizeResultsForQuery(userQuery, vectorSearch(queryEmbedding, 150, userQuery), 80);
         if (searchResults.length > 0) {
             logger.logRAG("vector", searchResults, Date.now() - ragStart, queryEmbedding.length);
         } else {
             logger.warn("RAG", "Vector search yielded no compatible results, using keyword fallback", {
                 embedding_dims: queryEmbedding.length,
             });
-            searchResults = keywordSearch(userQuery, 8);
+            searchResults = keywordSearch(userQuery, 80);
             logger.logRAG("keyword", searchResults, Date.now() - ragStart);
         }
     } else {
         // Fallback to keyword search
-        searchResults = keywordSearch(userQuery, 8);
+        searchResults = keywordSearch(userQuery, 80);
         logger.logRAG("keyword", searchResults, Date.now() - ragStart);
     }
 
-    // If no results, fallback to all products (since we only have 10)
-    const finalContextProducts = searchResults.length > 0 ? searchResults : getAllProducts().slice(0, 10);
+    // If no results, fallback to all products (increased for 3-tier build options)
+    const finalContextProducts = searchResults.length > 0 ? searchResults : getAllProducts().slice(0, 100);
     logger.debug("RAG", "Final context products selected", {
         final_count: finalContextProducts.length,
         used_fallback_all_products: searchResults.length === 0,
@@ -331,7 +454,128 @@ Help the user build or plan their PC. Prioritize their budget and use-case.
 4. **Explain decisions** - Tell them WHY each part was chosen
 5. **Summarize costs** - End with a clear total price breakdown
 
-## Response Structure for Build Recommendations
+## CLARIFYING QUESTIONS (CRITICAL - ASK FIRST WHEN QUERY IS VAGUE)
+
+**DO NOT generate builds immediately if ANY of these are unclear:**
+1. **Primary use case** - Gaming? Content creation? Programming? Office work?
+2. **Performance expectations** - What games/software? What resolution/FPS target?
+3. **Aesthetic preferences** - RGB? Minimalist? White theme? Size preference (ITX vs ATX)?
+4. **Existing components** - Already have monitor/keyboard/mouse? Reusing any parts?
+5. **Location constraints** - Buying from specific city/retailer? Need delivery?
+
+**When to ask vs when to build:**
+- **Ask 1-2 questions:** "80k build" (no use case mentioned)
+- **Ask 3-4 questions:** "Gaming PC" (no budget or performance target)
+- **Build immediately:** "₹80k gaming PC for 1080p high settings" (specific enough)
+
+**Question format (RESPOND WITH THIS EXACT FORMAT):**
+
+I'd love to help you build the perfect PC! Before I create your builds, I need to understand a few things:
+
+1. **What's your main use case?** (Gaming, video editing, programming, etc.)
+2. **What performance are you expecting?** (e.g., "Play GTA 6 at 1080p 60fps", "Cyberpunk 2077 ultra settings")
+3. **Any aesthetic preferences?** (RGB lights, all-white build, compact size, etc.)
+4. **Do you need everything included?** (Monitor, keyboard, mouse, or just the PC tower?)
+
+Once you answer these, I'll create 3 tailored builds for you!
+
+## 3-TIER BUILD SYSTEM (USE WHEN USER PROVIDES BUDGET WITH SPECIFIC FOCUS)
+
+When user asks for a build with a budget AND has clarified use case (e.g., "₹80k gaming build for 1080p"), you MUST provide THREE build options:
+
+### Build 1: Bang for Buck 💰
+**Philosophy:** Maximum gaming performance per rupee
+**Strategy:** 
+- Allocate 40-45% of budget to GPU (best GPU you can afford without bottlenecking)
+- Use reliable but basic components for everything else
+- Target 1080p high settings gaming
+- **Always stay under budget** (leave ₹2-3k buffer if possible)
+
+### Build 2: Balanced Build ⚖️
+**Philosophy:** Well-rounded, no weak links
+**Strategy:**
+- Even distribution across components
+- Quality PSU with good efficiency
+- Adequate cooling and case airflow
+- Reliable motherboard with necessary features
+- **Always stay under budget** (leave ₹2-3k buffer if possible)
+
+### Build 3: Future-Ready 🚀
+**Philosophy:** Platform for future upgrades
+**Strategy:**
+- Better motherboard (PCIe 4.0/5.0 support, more RAM slots, better VRMs)
+- Higher wattage PSU (750W+ for GPU upgrades)
+- DDR5 RAM if motherboard supports it
+- Case with good airflow and expansion room
+- **Can use buffer if significant performance/stability gain**, but indicate this clearly
+- If over budget, provide downgrade options to meet budget
+
+## RESPONSE STRUCTURE FOR BUDGET BUILDS
+
+\`\`\`
+## Build 1: Bang for Buck 💰
+
+### Component List
+| Component | Product | Price | Why |
+|-----------|---------|-------|-----|
+| CPU | **[Product Name]** [[PRODUCT:id]] | ₹XX,XXX | Reason |
+| GPU | **[Product Name]** [[PRODUCT:id]] | ₹XX,XXX | Reason |
+| Motherboard | **[Product Name]]** [[PRODUCT:id]] | ₹XX,XXX | Reason |
+| RAM | **[Product Name]** [[PRODUCT:id]] | ₹XX,XXX | Reason |
+| Storage | **[Product Name]** [[PRODUCT:id]] | ₹XX,XXX | Reason |
+| PSU | **[Product Name]** [[PRODUCT:id]] | ₹XX,XXX | Reason |
+| Case | **[Product Name]** [[PRODUCT:id]] | ₹XX,XXX | Reason |
+| Cooler | **[Product Name]** [[PRODUCT:id]] | ₹XX,XXX | Reason (if not stock) |
+
+**Total: ₹XX,XXX** ✅ ₹Y,XXX under budget (includes ₹2-3k buffer for shipping/build costs)
+
+### 📉 Budget Downgrade Options
+1. **Save ₹Z,XXX:** Downgrade GPU from [Current GPU] to [Cheaper GPU] [[PRODUCT:id]] - lose ~15% performance
+2. **Save ₹Z,XXX:** Use stock cooler instead of [Current Cooler] [[PRODUCT:id]] - minimal impact
+3. **Save ₹Z,XXX:** Reduce RAM from 16GB to 8GB [[PRODUCT:id]] - fine for pure gaming only
+
+### 📈 Next Big Upgrade Options
+1. **Upgrade to [Better GPU] [[PRODUCT:id]] for +₹Z,XXX** → ~35% better FPS (New total: ₹XX,XXX)
+2. **Add 1TB SSD [[PRODUCT:id]] for +₹Z,XXX** → More game storage (New total: ₹XX,XXX)
+3. **Upgrade PSU to [Higher Wattage] [[PRODUCT:id]] for +₹Z,XXX** → Ready for GPU upgrade later
+
+---
+
+## Build 2: Balanced Build ⚖️
+[SAME STRUCTURE AS ABOVE]
+
+---
+
+## Build 3: Future-Ready 🚀
+[SAME STRUCTURE AS ABOVE]
+**Note:** This build uses the buffer budget for [specific component] to enable [future upgrade path].
+OR
+**Downgrade to meet budget:** If you need to hit exactly ₹XX,XXX, downgrade [component] to [alternative] [[PRODUCT:id]] and save ₹Z,XXX.
+
+---
+
+## 🎯 My Recommendation
+Based on your query, I recommend **Build [1/2/3]** because:
+- [Reason 1]
+- [Reason 2]
+- [Reason 3]
+
+## Compatibility Notes
+- [Any socket/chipset/PSU considerations]
+
+## 💡 Pro Tips
+- [Additional advice about the builds]
+\`\`\`
+
+## CRITICAL RULES
+1. **GPU Priority:** For gaming builds, always prioritize GPU performance within budget constraints. Choose the best GPU that won't be bottlenecked by the CPU.
+2. **No Bottlenecks:** Ensure CPU can handle the GPU. Don't pair i3 with RTX 4070.
+3. **Buffer Handling:** Prefer leaving ₹2-3k buffer, but if using buffer gives significant performance gain (better GPU tier), clearly state: "*This build uses ₹X,XXX of the buffer to upgrade GPU from [A] to [B] for 25% better performance.*"
+4. **Exact Prices:** All prices must be exact from CONTEXT. Never estimate.
+5. **Product Tags:** Every product MUST have [[PRODUCT:id]] tag.
+6. **Upgrade/Downgrade Options:** Always provide 2-3 specific options with exact products from context and price deltas.
+
+## RESPONSE STRUCTURE FOR NON-BUDGET QUERIES (General Questions)
 1. **Quick Acknowledgment** - What you understood from their request
 2. **Component List** - Each part with:
    - Product name (bold)
@@ -345,17 +589,6 @@ Help the user build or plan their PC. Prioritize their budget and use-case.
 
     const systemPrompt = `${baseSystemPrompt}\n${modePrompt}`;
     logger.logSystemPrompt(systemPrompt, mode, finalContextProducts.length);
-
-    // Check for API Key
-    if (!process.env.GOOGLE_GENERATIVE_AI_API_KEY) {
-        logger.error("API", "Missing API key", {
-            env_var: "GOOGLE_GENERATIVE_AI_API_KEY",
-        });
-        return new Response("Missing GOOGLE_GENERATIVE_AI_API_KEY in .env.local", { status: 500 });
-    }
-    logger.debug("API", "API key check passed", {
-        env_var: "GOOGLE_GENERATIVE_AI_API_KEY",
-    });
 
     try {
         const apiCallStart = Date.now();
@@ -373,21 +606,52 @@ Help the user build or plan their PC. Prioritize their budget and use-case.
             messages: validMessages,
         });
 
-        const result = streamText({
-            model: google("gemini-2.5-flash"),
-            messages: validMessages,
-            system: systemPrompt,
-            onFinish: ({ text, usage }) => {
-                logger.logResponse(text, usage ?? {}, Date.now() - apiCallStart);
-            }
-        });
+        let lastError: unknown = null;
 
-        logger.info("API", "Streaming response to client", {
-            mode,
-            session_id: logger.getSessionId(),
-            log_file: logger.getLogFilePath(),
-        });
-        return result.toUIMessageStreamResponse();
+        for (let keyIndex = 0; keyIndex < orderedApiKeys.length; keyIndex++) {
+            const apiKey = orderedApiKeys[keyIndex];
+            const provider = createGoogleGenerativeAI({ apiKey });
+
+            try {
+                const result = streamText({
+                    model: provider("gemini-2.5-flash"),
+                    messages: validMessages,
+                    system: systemPrompt,
+                    onFinish: ({ text, usage }) => {
+                        logger.logResponse(text, usage ?? {}, Date.now() - apiCallStart);
+                    }
+                });
+
+                logger.info("API", "Streaming response to client", {
+                    mode,
+                    session_id: logger.getSessionId(),
+                    log_file: logger.getLogFilePath(),
+                    api_key: maskApiKey(apiKey),
+                    api_key_index: keyIndex,
+                });
+
+                return result.toUIMessageStreamResponse();
+            } catch (error) {
+                lastError = error;
+                const info = classifyApiError(error);
+                const hasNextKey = keyIndex < orderedApiKeys.length - 1;
+
+                logger.warn("API", "Model call failed for API key", {
+                    error_kind: info.kind,
+                    retryable: info.retryable,
+                    message: info.message,
+                    api_key: maskApiKey(apiKey),
+                    api_key_index: keyIndex,
+                    will_try_next_key: hasNextKey,
+                });
+
+                if (!(info.kind === "quota_exhausted" || info.kind === "rate_limited") || !hasNextKey) {
+                    break;
+                }
+            }
+        }
+
+        throw lastError ?? new Error("All API keys failed for model call");
     } catch (error) {
         const info = classifyApiError(error);
         logger.logError(error, "Gemini streamText call failed");

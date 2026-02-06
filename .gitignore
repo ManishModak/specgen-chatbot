@@ -31,6 +31,10 @@ yarn-error.log*
 .pnpm-debug.log*
 logs/*.log
 
+# data files (generated, but embeddings can be tracked if small)
+# NOTE: embeddings.json is tracked for hackathon demo - regenerate with: bun run generate-embeddings
+# data/embeddings.json
+
 # env files (can opt-in for committing if needed)
 .env*
 

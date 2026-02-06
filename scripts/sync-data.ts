@@ -25,6 +25,57 @@ const OUTPUT_EMBEDDINGS = path.join(CHATBOT_DATA_DIR, 'embeddings.json');
 
 type Category = "GPU" | "CPU" | "RAM" | "Motherboard" | "PSU" | "Case" | "Storage" | "CPU Cooler";
 
+const CATEGORY_PRICE_BOUNDS: Record<Category, { min: number; max: number }> = {
+    GPU: { min: 5000, max: 500000 },
+    CPU: { min: 3000, max: 200000 },
+    RAM: { min: 1000, max: 100000 },
+    Motherboard: { min: 2000, max: 120000 },
+    PSU: { min: 1500, max: 80000 },
+    Case: { min: 1000, max: 80000 },
+    Storage: { min: 1000, max: 300000 },
+    "CPU Cooler": { min: 500, max: 60000 },
+};
+
+const COMMON_OUTLIER_KEYWORDS = [
+    "printer",
+    "cartridge",
+    "ink",
+    "toner",
+    "luggage",
+    "trolley",
+    "suitcase",
+    "watch",
+    "smartwatch",
+    "tyre",
+    "tire",
+    "phone",
+    "mobile",
+    "smartphone",
+    "television",
+    "tv",
+    "headphone",
+    "earbuds",
+    "earphone",
+    "bike",
+    "bicycle",
+    "cycle",
+    "toy",
+    "inkjet",
+    "pixma",
+    "ecotank",
+];
+
+const COMPONENT_REQUIRED_INDICATORS: Record<Category, string[]> = {
+    GPU: ["graphics", "gpu", "gddr", "vram", "geforce", "radeon", "rtx", "gtx", "arc"],
+    CPU: ["processor", "cpu", "ryzen", "intel core", "core i", "threadripper", "athlon"],
+    RAM: ["ram", "memory", "ddr4", "ddr5", "dimm"],
+    Motherboard: ["motherboard", "mainboard", "mobo", "chipset", "socket", "lga", "am4", "am5"],
+    PSU: ["power supply", "psu", "smps", "80+", "bronze", "gold", "platinum", "watt"],
+    Case: ["cabinet", "pc case", "chassis", "mid tower", "full tower", "mini tower"],
+    Storage: ["ssd", "nvme", "m.2", "hdd", "sata", "pcie", "hard drive", "solid state"],
+    "CPU Cooler": ["cpu cooler", "liquid cooler", "aio", "air cooler", "heatsink", "radiator"],
+};
+
 interface ReferenceSpecsEntry {
     specs?: Record<string, unknown>;
     sources?: string[];
@@ -88,6 +139,47 @@ function _matchesRegistryIdInTitle(title: string, registryId: string): boolean {
     const modelTokenNorm = _normalizeForMatch(modelPart.replace(/_/g, " "));
     if (!modelTokenNorm) return false;
     return titleNorm.includes(modelTokenNorm);
+}
+
+function _hasOutlierKeyword(name: string): boolean {
+    const lower = name.toLowerCase();
+    return COMMON_OUTLIER_KEYWORDS.some((keyword) => lower.includes(keyword));
+}
+
+function _withinCategoryPriceRange(category: Category, price: number): boolean {
+    const bounds = CATEGORY_PRICE_BOUNDS[category];
+    return price >= bounds.min && price <= bounds.max;
+}
+
+function _hasComponentIndicator(name: string, category: Category): boolean {
+    const lower = name.toLowerCase();
+    const indicators = COMPONENT_REQUIRED_INDICATORS[category];
+    return indicators.some((indicator) => lower.includes(indicator));
+}
+
+function _matchesSearchTerm(title: string, searchTerm: string): boolean {
+    const titleNorm = _normalizeForMatch(title);
+    const searchNorm = _normalizeForMatch(searchTerm);
+    if (!searchNorm || searchNorm.length < 4) return true;
+
+    if (titleNorm.includes(searchNorm)) return true;
+
+    const chunks = searchTerm
+        .toLowerCase()
+        .split(/[^a-z0-9]+/)
+        .map((s) => s.trim())
+        .filter((s) => s.length >= 3);
+
+    if (chunks.length === 0) return true;
+
+    let matched = 0;
+    for (const chunk of chunks) {
+        if (titleNorm.includes(_normalizeForMatch(chunk))) {
+            matched++;
+        }
+    }
+
+    return matched >= Math.min(2, chunks.length);
 }
 
 function loadReferenceSpecsMap(filePath: string): Map<string, Record<string, unknown>> {
@@ -241,11 +333,28 @@ function transformProduct(
     const category = normalizeCategory(scraped.category, scraped.name, scrapedSpecs, sourceFile);
     if (!category) return null;
 
+    if (!_withinCategoryPriceRange(category, scraped.price)) {
+        return null;
+    }
+
+    if (_hasOutlierKeyword(scraped.name)) {
+        return null;
+    }
+
+    if (!_hasComponentIndicator(scraped.name, category)) {
+        return null;
+    }
+
     const registryId = _getStringSpec(scrapedSpecs, "registry_id");
+    const searchTerm = _getStringSpec(scrapedSpecs, "search_term");
 
     // Safety guard: if a product is tagged with a registry_id but doesn't actually mention the model, drop it.
     // This prevents attaching CPU/GPU context to irrelevant search results (common on marketplaces).
     if (registryId && !_matchesRegistryIdInTitle(scraped.name, registryId)) {
+        return null;
+    }
+
+    if (searchTerm && !_matchesSearchTerm(scraped.name, searchTerm)) {
         return null;
     }
 
