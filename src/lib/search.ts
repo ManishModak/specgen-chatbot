@@ -5,6 +5,135 @@ import embeddingsData from "../../data/embeddings.json";
 // Load data
 const products: Product[] = productsData as Product[];
 
+const BUILD_CATEGORIES: Product["category"][] = [
+    "CPU",
+    "GPU",
+    "Motherboard",
+    "RAM",
+    "Storage",
+    "PSU",
+    "Case",
+    "CPU Cooler",
+];
+
+function parseBudgetFromQuery(query: string): number | null {
+    const queryLower = query.toLowerCase();
+    const budgetMatch = queryLower.match(/(?:rs\.?|inr|₹)?\s*([\d,]+)\s*(k)?\b/i);
+    if (!budgetMatch) return null;
+
+    let budget = Number.parseInt(budgetMatch[1].replace(/,/g, ""), 10);
+    if (Number.isNaN(budget)) return null;
+
+    if (budgetMatch[2] || budget <= 999) {
+        budget = budget * 1000;
+    }
+
+    return budget;
+}
+
+function isBuildQuery(query: string): boolean {
+    const queryLower = query.toLowerCase();
+    const indicators = [
+        "pc",
+        "build",
+        "computer",
+        "rig",
+        "setup",
+        "gaming pc",
+        "workstation",
+        "gaming",
+    ];
+
+    const hasBuildTerm = indicators.some((term) => queryLower.includes(term));
+    const hasBudget = parseBudgetFromQuery(queryLower) !== null;
+    return hasBuildTerm || hasBudget;
+}
+
+function dedupeProducts(list: Product[]): Product[] {
+    const seen = new Set<string>();
+    const result: Product[] = [];
+
+    for (const p of list) {
+        const key = `${p.category}|${p.normalized_name || p.name.toLowerCase()}|${p.price}`;
+        if (seen.has(key)) continue;
+        seen.add(key);
+        result.push(p);
+    }
+
+    return result;
+}
+
+function categoryBudgetTarget(category: Product["category"], budget: number): number {
+    switch (category) {
+        case "GPU":
+            return budget * 0.35;
+        case "CPU":
+            return budget * 0.25;
+        case "Motherboard":
+            return budget * 0.15;
+        case "RAM":
+            return budget * 0.10;
+        case "Storage":
+            return budget * 0.08;
+        case "PSU":
+            return budget * 0.08;
+        case "Case":
+            return budget * 0.08;
+        case "CPU Cooler":
+            return budget * 0.05;
+        default:
+            return budget * 0.10;
+    }
+}
+
+function pickCategoryFallback(category: Product["category"], budget: number | null): Product | null {
+    const candidates = products.filter((p) => p.category === category && p.stock !== false);
+    if (candidates.length === 0) return null;
+
+    if (!budget) {
+        return [...candidates].sort((a, b) => a.price - b.price)[0];
+    }
+
+    const target = categoryBudgetTarget(category, budget);
+    const upperBound = target * 1.5;
+
+    const nearTarget = candidates
+        .filter((p) => p.price <= upperBound)
+        .sort((a, b) => Math.abs(a.price - target) - Math.abs(b.price - target));
+
+    if (nearTarget.length > 0) return nearTarget[0];
+
+    return [...candidates].sort((a, b) => a.price - b.price)[0];
+}
+
+export function optimizeResultsForQuery(query: string, initialResults: Product[], limit: number = 10): Product[] {
+    const deduped = dedupeProducts(initialResults);
+    if (!isBuildQuery(query)) {
+        return deduped.slice(0, limit);
+    }
+
+    const budget = parseBudgetFromQuery(query);
+    const selected: Product[] = [];
+    const selectedIds = new Set<string>();
+
+    for (const category of BUILD_CATEGORIES) {
+        const fromInitial = deduped.find((p) => p.category === category && !selectedIds.has(p.id));
+        const candidate = fromInitial ?? pickCategoryFallback(category, budget);
+        if (!candidate || selectedIds.has(candidate.id)) continue;
+        selected.push(candidate);
+        selectedIds.add(candidate.id);
+    }
+
+    for (const p of deduped) {
+        if (selected.length >= limit) break;
+        if (selectedIds.has(p.id)) continue;
+        selected.push(p);
+        selectedIds.add(p.id);
+    }
+
+    return selected.slice(0, limit);
+}
+
 // Handle the actual embeddings.json structure: { embeddings: [{ id, text, vector }] }
 type EmbeddingEntry = { id: string; text: string; vector: number[] };
 const rawEmbeddings = (embeddingsData as { embeddings: EmbeddingEntry[] }).embeddings || [];
@@ -41,18 +170,8 @@ export function keywordSearch(query: string, limit: number = 10): Product[] {
     const queryTerms = queryLower.split(/\s+/);
 
     // Detect if this is a PC build query
-    const pcBuildIndicators = ['pc', 'build', 'computer', 'rig', 'setup', 'gaming pc', 'workstation'];
-    const isPcBuildQuery = pcBuildIndicators.some(term => queryLower.includes(term));
-
-    // Parse budget from query
-    let budget: number | null = null;
-    const budgetMatch = query.match(/₹?\s*([\d,]+)\s*k?/i);
-    if (budgetMatch) {
-        budget = parseInt(budgetMatch[1].replace(/,/g, ""));
-        if (queryLower.includes("k") || budget < 1000) {
-            budget = budget * 1000;
-        }
-    }
+    const isPcBuildQuery = isBuildQuery(query);
+    const budget = parseBudgetFromQuery(query);
 
     // For PC build queries, return diverse products from each category
     if (isPcBuildQuery && budget) {
@@ -85,7 +204,7 @@ export function keywordSearch(query: string, limit: number = 10): Product[] {
             }
         }
 
-        return result.slice(0, limit);
+        return optimizeResultsForQuery(query, result, limit);
     }
 
     // Standard keyword search for non-build queries
@@ -117,11 +236,13 @@ export function keywordSearch(query: string, limit: number = 10): Product[] {
         return { product, score };
     });
 
-    return scored
+    const results = scored
         .filter((s) => s.score > 0)
         .sort((a, b) => b.score - a.score)
         .slice(0, limit)
         .map((s) => s.product);
+
+    return optimizeResultsForQuery(query, results, limit);
 }
 
 /**
@@ -133,13 +254,14 @@ export function vectorSearch(
 ): Product[] {
     const scored = products.map((product) => {
         const productEmbedding = embeddingMap.get(product.id);
-        const score = productEmbedding
+        const score = productEmbedding && productEmbedding.length === queryEmbedding.length
             ? cosineSimilarity(queryEmbedding, productEmbedding)
             : 0;
         return { product, score };
     });
 
     return scored
+        .filter((s) => s.score > 0)
         .sort((a, b) => b.score - a.score)
         .slice(0, limit)
         .map((s) => s.product);

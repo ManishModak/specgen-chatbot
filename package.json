@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "private": true,
   "scripts": {
-    "predev": "bun scripts/sync-data.ts",
+    "predev": "bun scripts/predev.ts",
     "dev": "next dev --webpack",
     "build": "next build --webpack",
     "start": "next start",

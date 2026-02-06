@@ -1,10 +1,115 @@
 import { google } from "@ai-sdk/google";
 import { streamText, embed } from "ai";
-import { keywordSearch, vectorSearch, getAllProducts, formatProductsAsContext } from "@/lib/search";
+import { keywordSearch, vectorSearch, getAllProducts, formatProductsAsContext, optimizeResultsForQuery } from "@/lib/search";
 import { parseBuildList, formatParsedBuild } from "@/lib/build-parser";
 import { analyzeBuild, formatAnalysisAsContext } from "@/lib/build-analyzer";
 import { Product } from "@/lib/products";
 import { logger } from "@/lib/logger";
+
+type ApiErrorKind =
+    | "quota_exhausted"
+    | "rate_limited"
+    | "auth_error"
+    | "model_error"
+    | "network_error"
+    | "unknown";
+
+interface ApiErrorInfo {
+    kind: ApiErrorKind;
+    statusCode: number;
+    message: string;
+    retryable: boolean;
+}
+
+function getErrorMessage(error: unknown): string {
+    if (error instanceof Error) return error.message;
+    return String(error);
+}
+
+function getErrorStatusCode(error: unknown): number | undefined {
+    if (!error || typeof error !== "object") return undefined;
+    const maybeAny = error as Record<string, unknown>;
+
+    const statusCode = maybeAny.statusCode;
+    if (typeof statusCode === "number") return statusCode;
+
+    const response = maybeAny.response;
+    if (response && typeof response === "object") {
+        const responseStatus = (response as Record<string, unknown>).status;
+        if (typeof responseStatus === "number") return responseStatus;
+    }
+
+    return undefined;
+}
+
+function classifyApiError(error: unknown): ApiErrorInfo {
+    const message = getErrorMessage(error);
+    const lowerMessage = message.toLowerCase();
+    const statusCode = getErrorStatusCode(error);
+
+    const quotaHit =
+        lowerMessage.includes("resource_exhausted") ||
+        lowerMessage.includes("quota") ||
+        lowerMessage.includes("quota exceeded");
+
+    if (quotaHit) {
+        return {
+            kind: "quota_exhausted",
+            statusCode: 429,
+            message,
+            retryable: true,
+        };
+    }
+
+    if (statusCode === 429 || lowerMessage.includes("rate limit") || lowerMessage.includes("too many requests")) {
+        return {
+            kind: "rate_limited",
+            statusCode: 429,
+            message,
+            retryable: true,
+        };
+    }
+
+    if (
+        statusCode === 401 ||
+        statusCode === 403 ||
+        lowerMessage.includes("api key") ||
+        lowerMessage.includes("permission denied") ||
+        lowerMessage.includes("unauthorized")
+    ) {
+        return {
+            kind: "auth_error",
+            statusCode: 500,
+            message,
+            retryable: false,
+        };
+    }
+
+    if (lowerMessage.includes("not found") || lowerMessage.includes("not supported for") || lowerMessage.includes("model")) {
+        return {
+            kind: "model_error",
+            statusCode: 500,
+            message,
+            retryable: false,
+        };
+    }
+
+    if (lowerMessage.includes("network") || lowerMessage.includes("fetch") || statusCode === 503 || statusCode === 504) {
+        return {
+            kind: "network_error",
+            statusCode: 503,
+            message,
+            retryable: true,
+        };
+    }
+
+    return {
+        kind: "unknown",
+        statusCode: 500,
+        message,
+        retryable: false,
+    };
+}
 
 // Allow streaming responses up to 30 seconds
 export const maxDuration = 30;
@@ -13,16 +118,36 @@ export const maxDuration = 30;
  * Generate embedding for user query using Gemini
  */
 async function embedQuery(query: string): Promise<number[] | null> {
-    try {
-        const { embedding } = await embed({
-            model: google.textEmbeddingModel("text-embedding-004"),
-            value: query,
-        });
-        return embedding;
-    } catch (error) {
-        logger.logError(error, "Embedding generation failed");
-        return null;
+    const modelCandidates = ["gemini-embedding-001", "text-embedding-004"];
+
+    for (const modelName of modelCandidates) {
+        try {
+            const { embedding } = await embed({
+                model: google.textEmbeddingModel(modelName),
+                value: query,
+            });
+
+            logger.debug("RAG", "Embedding generation succeeded", {
+                model: modelName,
+                embedding_dims: embedding.length,
+            });
+
+            return embedding;
+        } catch (error) {
+            const info = classifyApiError(error);
+            logger.warn("RAG", "Embedding model failed", {
+                model: modelName,
+                error: info.message,
+                error_kind: info.kind,
+                retryable: info.retryable,
+            });
+        }
     }
+
+    logger.error("RAG", "All embedding models failed", {
+        candidates: modelCandidates,
+    });
+    return null;
 }
 
 export async function POST(req: Request) {
@@ -55,8 +180,16 @@ export async function POST(req: Request) {
 
     if (queryEmbedding) {
         // Use semantic vector search
-        searchResults = vectorSearch(queryEmbedding, 8);
-        logger.logRAG("vector", searchResults, Date.now() - ragStart, queryEmbedding.length);
+        searchResults = optimizeResultsForQuery(userQuery, vectorSearch(queryEmbedding, 16), 8);
+        if (searchResults.length > 0) {
+            logger.logRAG("vector", searchResults, Date.now() - ragStart, queryEmbedding.length);
+        } else {
+            logger.warn("RAG", "Vector search yielded no compatible results, using keyword fallback", {
+                embedding_dims: queryEmbedding.length,
+            });
+            searchResults = keywordSearch(userQuery, 8);
+            logger.logRAG("keyword", searchResults, Date.now() - ragStart);
+        }
     } else {
         // Fallback to keyword search
         searchResults = keywordSearch(userQuery, 8);
@@ -256,8 +389,24 @@ Help the user build or plan their PC. Prioritize their budget and use-case.
         });
         return result.toUIMessageStreamResponse();
     } catch (error) {
+        const info = classifyApiError(error);
         logger.logError(error, "Gemini streamText call failed");
-        return new Response("Error communicating with AI service.", { status: 500 });
+        logger.error("API", "Provider failure classified", {
+            error_kind: info.kind,
+            status_code: info.statusCode,
+            retryable: info.retryable,
+            message: info.message,
+        });
+
+        if (info.kind === "quota_exhausted" || info.kind === "rate_limited") {
+            return new Response("AI service is temporarily rate-limited. Please retry in a minute.", { status: 429 });
+        }
+
+        if (info.kind === "auth_error") {
+            return new Response("AI service authentication failed. Check server API key configuration.", { status: 500 });
+        }
+
+        return new Response("Error communicating with AI service.", { status: info.statusCode });
     }
 }
 

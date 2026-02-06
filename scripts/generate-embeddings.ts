@@ -62,9 +62,19 @@ function buildProductText(product: Product): string {
  * Generate embedding for a single text using Gemini Embedding API
  */
 async function generateEmbedding(text: string): Promise<number[]> {
-    const model = genAI.getGenerativeModel({ model: "text-embedding-004" });
-    const result = await model.embedContent(text);
-    return result.embedding.values;
+    const modelCandidates = ["gemini-embedding-001", "text-embedding-004"];
+
+    for (const modelName of modelCandidates) {
+        try {
+            const model = genAI.getGenerativeModel({ model: modelName });
+            const result = await model.embedContent(text);
+            return result.embedding.values;
+        } catch (error) {
+            console.warn(`   ⚠️ Embedding model failed (${modelName}): ${error}`);
+        }
+    }
+
+    throw new Error("All embedding models failed");
 }
 
 async function main() {
@@ -101,7 +111,7 @@ async function main() {
 
     // Save embeddings
     const output = {
-        model: "text-embedding-004",
+        model: "gemini-embedding-001|text-embedding-004(fallback)",
         dimension: embeddings[0]?.vector.length || 768,
         generated_at: new Date().toISOString(),
         embeddings: embeddings
