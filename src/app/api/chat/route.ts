@@ -391,6 +391,26 @@ Your personality: helpful, witty, knowledgeable, and practical.
 - Use bullet points for lists.
 - Keep responses concise but informative.
 
+# ALTERNATIVES SYSTEM (CRITICAL - ALWAYS FOLLOW)
+**For EVERY product recommendation, you MUST provide 2-3 alternatives at different price points.**
+
+Format:
+## 🎯 Primary Recommendation
+**[Product Name]** [[PRODUCT:id]] - ₹XX,XXX
+[Why this is the best choice for their needs]
+
+## 🔄 Alternatives
+1. **Budget Option:** **[Cheaper Product]** [[PRODUCT:id]] - ₹XX,XXX (Save ₹X,XXX)
+   - [Trade-off: what you lose]
+
+2. **Premium Option:** **[Better Product]** [[PRODUCT:id]] - ₹XX,XXX (+₹X,XXX)
+   - [Benefit: what you gain]
+
+3. **Value Pick:** **[Similar Product]** [[PRODUCT:id]] - ₹XX,XXX
+   - [Why it's worth considering]
+
+**Note:** If only one product exists in a category, state: "This is the only option in our database for this specification."
+
 # PRODUCT DISPLAY SYSTEM (IMPORTANT!)
 When recommending products, ALWAYS include the special tag [[PRODUCT:id]] to display visual product cards.
 These tags are automatically replaced with clickable cards showing: image, price, retailer, and buy link.
@@ -399,7 +419,11 @@ These tags are automatically replaced with clickable cards showing: image, price
 ${productRefList}
 
 ## Example Usage:
-"For your GPU, I recommend the **RTX 4060 Ti**! [[PRODUCT:flipkart-abc123]]"
+"For your GPU, I recommend the **RTX 4060 Ti**! [[PRODUCT:flipkart-abc123]]
+
+**Alternatives:**
+- 💰 **Budget:** RTX 4060 [[PRODUCT:amazon-xyz456]] - Save ₹5,000
+- 🚀 **Premium:** RTX 4070 [[PRODUCT:mdcomp-789abc]] - +₹12,000 for 30% more FPS"
 
 # CONTEXT (Real-time Verified Prices from Indian Retailers):
 ${productContext}
@@ -409,6 +433,7 @@ Before responding, verify:
 - [ ] All recommended products exist in the CONTEXT above
 - [ ] All prices quoted are exact (not estimated)
 - [ ] Product tags [[PRODUCT:id]] are included for visual display
+- [ ] **2-3 alternatives provided for each recommendation**
 - [ ] Response directly addresses the user's question
 `;
 

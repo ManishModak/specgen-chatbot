@@ -15,9 +15,9 @@ export default function LandingPage() {
             <span className="text-lg font-bold tracking-tight text-white">SpecGen</span>
           </div>
           <nav className="flex items-center gap-6 text-sm font-medium text-muted-foreground">
-            <Link href="#" className="hover:text-white transition-colors">Features</Link>
-            <Link href="#" className="hover:text-white transition-colors">Pricing</Link>
-            <Link href="https://github.com/specgen/bot" className="hover:text-white transition-colors">GitHub</Link>
+            <Link href="#features" className="hover:text-white transition-colors">Features</Link>
+            <Link href="/chat" className="hover:text-white transition-colors">Chat</Link>
+            <Link href="https://github.com/ManishModak/specgen-chatbot" target="_blank" rel="noopener noreferrer" className="hover:text-white transition-colors">GitHub</Link>
           </nav>
         </div>
       </header>
@@ -46,15 +46,12 @@ export default function LandingPage() {
               The first AI-powered PC aggregator for India. Chat with an expert that knows real prices from MDComputers, Vedant, and Amazon.
             </p>
 
-            <div className="mt-10 flex flex-col items-center justify-center gap-4 sm:flex-row">
+            <div className="mt-10 flex justify-center">
               <Link href="/chat">
                 <Button size="lg" className="h-12 rounded-full px-8 text-base shadow-lg shadow-primary/25">
                   Start Building <ArrowRightIcon className="ml-2 size-4" />
                 </Button>
               </Link>
-              <Button size="lg" variant="outline" className="h-12 rounded-full px-8 text-base border-white/10 bg-white/5 hover:bg-white/10">
-                View Gallery
-              </Button>
             </div>
 
             <p className="mt-8 text-sm text-muted-foreground/60">
@@ -64,7 +61,7 @@ export default function LandingPage() {
         </section>
 
         {/* Features Grid */}
-        <section className="container mx-auto px-6 -mt-32 relative z-20 pb-24">
+        <section id="features" className="container mx-auto px-6 -mt-32 relative z-20 pb-24 scroll-mt-20">
           <div className="grid gap-6 md:grid-cols-3">
             {[
               {
