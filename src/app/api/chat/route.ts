@@ -3,6 +3,7 @@ import { streamText, embed } from "ai";
 import { keywordSearch, vectorSearch, getAllProducts, formatProductsAsContext, optimizeResultsForQuery } from "@/lib/search";
 import { parseBuildList, formatParsedBuild } from "@/lib/build-parser";
 import { analyzeBuild, formatAnalysisAsContext } from "@/lib/build-analyzer";
+import { generateRoastSuggestions, formatRoastAsContext } from "@/lib/roast-suggestions";
 import { Product } from "@/lib/products";
 import { logger } from "@/lib/logger";
 
@@ -338,11 +339,15 @@ export async function POST(req: Request) {
 
         if (parsedBuild.components.length > 0) {
             const analysis = analyzeBuild(parsedBuild);
+            const roastResult = generateRoastSuggestions(analysis, parsedBuild);
+
             buildAnalysisContext = `
 BUILD ANALYSIS (Pre-computed by system):
 ${formatParsedBuild(parsedBuild)}
 
 ${formatAnalysisAsContext(analysis)}
+
+${formatRoastAsContext(roastResult)}
 `;
 
             logger.logRoastAnalysis(

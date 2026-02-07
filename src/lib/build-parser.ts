@@ -9,6 +9,8 @@ export interface ParsedComponent {
     rawText: string;
     matchedProduct: Product | null;
     confidence: number; // 0-1 score
+    extractedPrice?: number; // Price extracted from text
+    sourceURL?: string; // Source URL if parsed from link
 }
 
 export interface ParsedBuild {
@@ -69,18 +71,56 @@ const CATEGORY_PATTERNS: Record<string, RegExp[]> = {
 
 /**
  * Parse a text input and extract components
+ * Supports: plain text, URLs (Amazon/Flipkart), PCPartPicker format
  */
 export function parseBuildList(input: string): ParsedBuild {
     const products = getAllProducts();
+
+    // Pre-process: detect and handle special formats
+    let processedInput = input;
+    const extractedPrices: Record<string, number> = {};
+
+    // Handle PCPartPicker format (e.g., "Type | Item | Price")
+    if (isPCPartPickerFormat(input)) {
+        const pcppResult = parsePCPartPickerFormat(input, products);
+        if (pcppResult.components.length > 0) {
+            return pcppResult;
+        }
+    }
+
+    // Extract URLs and try to match them
+    const urlComponents = extractComponentsFromURLs(input, products);
+
+    // Extract inline prices (e.g., "RTX 4070 - ₹50,000")
+    const priceMatches = input.matchAll(/([₹$Rs\.]+\s*[\d,]+)/gi);
+    for (const match of priceMatches) {
+        const value = parsePrice(match[1]);
+        if (value > 0) {
+            extractedPrices[match.index?.toString() || "0"] = value;
+        }
+    }
+
     const lines = input.split(/[\n,;]+/).map((l) => l.trim()).filter(Boolean);
-    const components: ParsedComponent[] = [];
+    const components: ParsedComponent[] = [...urlComponents];
     const unmatchedText: string[] = [];
+    const matchedCategories = new Set(urlComponents.map(c => c.category));
 
     for (const line of lines) {
+        // Skip URL-only lines (already processed)
+        if (/^https?:\/\//i.test(line.trim())) continue;
+
         const parsed = parseComponent(line, products);
-        if (parsed) {
+        if (parsed && !matchedCategories.has(parsed.category)) {
+            // Try to attach price if found inline
+            if (!parsed.matchedProduct) {
+                const linePrice = extractPriceFromText(line);
+                if (linePrice > 0) {
+                    parsed.extractedPrice = linePrice;
+                }
+            }
             components.push(parsed);
-        } else {
+            matchedCategories.add(parsed.category);
+        } else if (!parsed) {
             unmatchedText.push(line);
         }
     }
@@ -92,6 +132,206 @@ export function parseBuildList(input: string): ParsedBuild {
     }
 
     return { components, unmatchedText };
+}
+
+/**
+ * Check if input is PCPartPicker format
+ */
+function isPCPartPickerFormat(input: string): boolean {
+    return /type\s*\|\s*item/i.test(input) ||
+        /\|\s*pcpartpicker/i.test(input) ||
+        input.includes("| https://") ||
+        /\*\*[A-Z]+\*\*/i.test(input); // Markdown format
+}
+
+/**
+ * Parse PCPartPicker table format
+ */
+function parsePCPartPickerFormat(input: string, products: Product[]): ParsedBuild {
+    const components: ParsedComponent[] = [];
+    const unmatchedText: string[] = [];
+
+    // Split by newline and process each row
+    const lines = input.split(/\n/).filter(l => l.trim());
+
+    for (const line of lines) {
+        // Skip header rows
+        if (/type\s*\|/i.test(line) || line.includes("---") || line.includes("===")) {
+            continue;
+        }
+
+        // Try to parse as markdown table row: | Category | Item |
+        const tableMatch = line.match(/\|\s*(?:\*\*)?([^|*]+)(?:\*\*)?\s*\|\s*\[?([^\]|]+)/);
+        if (tableMatch) {
+            const [, category, itemText] = tableMatch;
+            const cleanCategory = category.trim().replace(/\*\*/g, "");
+            const cleanItem = itemText.trim().replace(/\[|\]/g, "");
+
+            // Map PCPartPicker categories to our categories
+            const mappedCategory = mapPCPartPickerCategory(cleanCategory);
+            if (mappedCategory) {
+                const matchedProduct = findBestMatch(cleanItem, products, mappedCategory);
+                components.push({
+                    category: mappedCategory,
+                    rawText: cleanItem,
+                    matchedProduct,
+                    confidence: matchedProduct ? calculateConfidence(cleanItem, matchedProduct) : 0.4,
+                });
+            } else {
+                unmatchedText.push(line);
+            }
+            continue;
+        }
+
+        // Try to parse generic category: item format
+        const colonMatch = line.match(/^([^:]+):\s*(.+)$/);
+        if (colonMatch) {
+            const [, category, itemText] = colonMatch;
+            const mappedCategory = mapPCPartPickerCategory(category.trim());
+            if (mappedCategory) {
+                const matchedProduct = findBestMatch(itemText.trim(), products, mappedCategory);
+                components.push({
+                    category: mappedCategory,
+                    rawText: itemText.trim(),
+                    matchedProduct,
+                    confidence: matchedProduct ? calculateConfidence(itemText, matchedProduct) : 0.4,
+                });
+            }
+        }
+    }
+
+    return { components, unmatchedText };
+}
+
+/**
+ * Map PCPartPicker category names to our categories
+ */
+function mapPCPartPickerCategory(category: string): string | null {
+    const categoryLower = category.toLowerCase().trim();
+
+    const mapping: Record<string, string> = {
+        "cpu": "CPU",
+        "processor": "CPU",
+        "gpu": "GPU",
+        "video card": "GPU",
+        "graphics card": "GPU",
+        "graphics": "GPU",
+        "motherboard": "Motherboard",
+        "mobo": "Motherboard",
+        "memory": "RAM",
+        "ram": "RAM",
+        "storage": "Storage",
+        "ssd": "Storage",
+        "hdd": "Storage",
+        "power supply": "PSU",
+        "psu": "PSU",
+        "case": "Case",
+        "tower": "Case",
+        "cabinet": "Case",
+        "chassis": "Case",
+        "cpu cooler": "CPU Cooler",
+        "cooler": "CPU Cooler",
+        "cooling": "CPU Cooler",
+    };
+
+    return mapping[categoryLower] || null;
+}
+
+/**
+ * Extract components from URLs in the text
+ */
+function extractComponentsFromURLs(text: string, products: Product[]): ParsedComponent[] {
+    const components: ParsedComponent[] = [];
+
+    // Find Amazon/Flipkart URLs
+    const urlPattern = /https?:\/\/(www\.)?(amazon\.(in|com)|flipkart\.com)[^\s\n"'<>]+/gi;
+    const urls = text.match(urlPattern) || [];
+
+    for (const url of urls) {
+        const parsed = parseProductURL(url, products);
+        if (parsed) {
+            components.push(parsed);
+        }
+    }
+
+    return components;
+}
+
+/**
+ * Parse a product URL and try to match it
+ */
+function parseProductURL(url: string, products: Product[]): ParsedComponent | null {
+    try {
+        const urlObj = new URL(url);
+        let productName = "";
+
+        // Amazon URL parsing
+        if (urlObj.hostname.includes("amazon")) {
+            // Amazon URLs often have product names in the path like /dp/B0XXXXX/Some-Product-Name
+            const pathParts = urlObj.pathname.split("/");
+            const dpIndex = pathParts.findIndex(p => p === "dp" || p === "gp");
+            if (dpIndex > 0 && pathParts[dpIndex - 1]) {
+                productName = pathParts[dpIndex - 1].replace(/-/g, " ");
+            } else {
+                // Try to extract from path
+                const namePart = pathParts.find(p => p.length > 10 && !p.startsWith("B0"));
+                if (namePart) {
+                    productName = namePart.replace(/-/g, " ");
+                }
+            }
+        }
+
+        // Flipkart URL parsing
+        if (urlObj.hostname.includes("flipkart")) {
+            const pathParts = urlObj.pathname.split("/");
+            const namePart = pathParts.find(p => p.length > 5 && !p.startsWith("p/") && p !== "p");
+            if (namePart) {
+                productName = namePart.replace(/-/g, " ");
+            }
+        }
+
+        if (!productName) return null;
+
+        // Try to detect category and find match
+        for (const [category, patterns] of Object.entries(CATEGORY_PATTERNS)) {
+            for (const pattern of patterns) {
+                if (pattern.test(productName)) {
+                    const matchedProduct = findBestMatch(productName, products, category);
+                    return {
+                        category,
+                        rawText: productName,
+                        matchedProduct,
+                        confidence: matchedProduct ? calculateConfidence(productName, matchedProduct) : 0.3,
+                        sourceURL: url,
+                    };
+                }
+            }
+        }
+
+        return null;
+    } catch {
+        return null;
+    }
+}
+
+/**
+ * Extract price from text string
+ */
+function extractPriceFromText(text: string): number {
+    const priceMatch = text.match(/[₹$Rs\.]+\s*([\d,]+)/i);
+    if (priceMatch) {
+        return parsePrice(priceMatch[1]);
+    }
+    return 0;
+}
+
+/**
+ * Parse price string to number
+ */
+function parsePrice(priceStr: string): number {
+    const cleaned = priceStr.replace(/[₹$Rs\.,\s]/gi, "");
+    const value = parseInt(cleaned, 10);
+    return isNaN(value) ? 0 : value;
 }
 
 /**

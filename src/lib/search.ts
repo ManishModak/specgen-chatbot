@@ -1,9 +1,9 @@
 import { Product } from "./products";
 import productsData from "../../data/products.json";
 import embeddingsData from "../../data/embeddings.json";
-import { 
-    matchGPUFromRegistry, 
-    matchCPUFromRegistry, 
+import {
+    matchGPUFromRegistry,
+    matchCPUFromRegistry,
     checkCPUMotherboardCompatibility,
     getGPUGamingTier,
     getCPUGamingTier,
@@ -222,29 +222,123 @@ export function keywordSearch(query: string, limit: number = 10): Product[] {
     const queryLower = query.toLowerCase();
     const queryTerms = queryLower.split(/\s+/);
 
-    // Detect if this is a PC build query
     const isPcBuildQuery = isBuildQuery(query);
     const budget = parseBudgetFromQuery(query);
 
-    // For PC build queries, return diverse products from each category
     if (isPcBuildQuery && budget) {
         const categories = ['CPU', 'GPU', 'Motherboard', 'RAM', 'Storage', 'PSU', 'Case', 'CPU Cooler'];
         const result: Product[] = [];
 
         for (const category of categories) {
-            // Get products from this category within budget
             const categoryProducts = products
                 .filter(p => p.category === category && p.stock !== false)
                 .sort((a, b) => {
-                    // Prefer products closer to (but under) a reasonable fraction of budget
-                    const categoryBudget = category === 'GPU' ? budget! * 0.35
-                        : category === 'CPU' ? budget! * 0.25
-                            : category === 'Motherboard' ? budget! * 0.15
-                                : category === 'RAM' ? budget! * 0.10
-                                    : category === 'Storage' ? budget! * 0.08
-                                        : category === 'PSU' ? budget! * 0.08
-                                            : category === 'Case' ? budget! * 0.08
-                                                : budget! * 0.05;
+                    const categoryBudget = category === 'GPU' ? budget * 0.35
+                        : category === 'CPU' ? budget * 0.25
+                            : category === 'Motherboard' ? budget * 0.15
+                                : category === 'RAM' ? budget * 0.10
+                                    : category === 'Storage' ? budget * 0.08
+                                        : category === 'PSU' ? budget * 0.08
+                                            : category === 'Case' ? budget * 0.08
+                                                : budget * 0.05;
 
                     const aDistance = Math.abs(a.price - categoryBudget);
-                    const bDistance = Math.abs(b.price - catego
+                    const bDistance = Math.abs(b.price - categoryBudget);
+                    return aDistance - bDistance;
+                });
+
+            if (categoryProducts.length > 0) {
+                result.push(...categoryProducts.slice(0, 3));
+            }
+        }
+
+        return result.slice(0, limit);
+    }
+
+    // Regular keyword search
+    const scored = products.map(product => {
+        const text = `${product.name} ${product.brand} ${product.category} ${product.normalized_name || ""}`.toLowerCase();
+        let score = 0;
+        for (const term of queryTerms) {
+            if (text.includes(term)) score++;
+        }
+        return { product, score };
+    });
+
+    return scored
+        .filter(s => s.score > 0)
+        .sort((a, b) => b.score - a.score)
+        .slice(0, limit)
+        .map(s => s.product);
+}
+
+/**
+ * Vector (semantic) search using embeddings
+ */
+export function vectorSearch(queryEmbedding: number[], limit: number = 10, query?: string): Product[] {
+    const isHighPerf = query ? isHighPerformanceGamingQuery(query) : false;
+
+    const scored = products
+        .filter(p => p.stock !== false)
+        .map(product => {
+            const productEmbedding = embeddingMap.get(product.id);
+            if (!productEmbedding) return { product, score: 0 };
+
+            const similarity = cosineSimilarity(queryEmbedding, productEmbedding);
+
+            // Apply gaming suitability filter
+            let suitabilityMultiplier = 1;
+            if (query && isBuildQuery(query)) {
+                if (!checkGPUSuitability(product, isHighPerf)) suitabilityMultiplier = 0.3;
+                if (!checkCPUSuitability(product)) suitabilityMultiplier *= 0.7;
+            }
+
+            return { product, score: similarity * suitabilityMultiplier };
+        });
+
+    return scored
+        .filter(s => s.score > 0.1)
+        .sort((a, b) => b.score - a.score)
+        .slice(0, limit)
+        .map(s => s.product);
+}
+
+/**
+ * Get all products
+ */
+export function getAllProducts(): Product[] {
+    return products;
+}
+
+/**
+ * Get products by category
+ */
+export function getProductsByCategory(category: Product["category"]): Product[] {
+    return products.filter(p => p.category === category);
+}
+
+/**
+ * Format products as context string for LLM
+ */
+export function formatProductsAsContext(productList: Product[]): string {
+    return productList
+        .map(p => {
+            const specs = Object.entries(p.specs || {})
+                .slice(0, 5)
+                .map(([k, v]) => `${k}: ${v}`)
+                .join(", ");
+
+            const priceFormatted = new Intl.NumberFormat("en-IN", {
+                style: "currency",
+                currency: "INR",
+                maximumFractionDigits: 0,
+            }).format(p.price);
+
+            return `[${p.id}] ${p.category}: ${p.brand} ${p.name}
+Price: ${priceFormatted} @ ${p.retailer}
+Stock: ${p.stock !== false ? "In Stock ✓" : "Out of Stock ✗"}
+Specs: ${specs}
+Use Cases: ${p.use_cases?.join(", ") || "General use"}`;
+        })
+        .join("\n\n");
+}

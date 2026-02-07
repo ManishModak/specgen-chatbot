@@ -1,6 +1,6 @@
 # Project Status Log
 
-> **Last Updated:** 2026-02-02 14:30 IST
+> **Last Updated:** 2026-02-07 20:00 IST
 
 This document tracks the progress of the SpecGen Chatbot development.
 
@@ -15,6 +15,23 @@ This document tracks the progress of the SpecGen Chatbot development.
 ---
 
 ## Progress Log
+
+### 2026-02-07 (Module B: Roast & Fix)
+
+| Time | Task | Status |
+|------|------|--------|
+| 19:00 | Enhanced `build-analyzer.ts` with 4 new compatibility checks | ✅ Done |
+| 19:20 | Enhanced `build-parser.ts` with URL + PCPartPicker parsing | ✅ Done |
+| 19:35 | Created `roast-suggestions.ts` module | ✅ Done |
+| 19:45 | Created `BuildScoreGauge` + `IssueCard` UI components | ✅ Done |
+| 19:55 | Integrated roast-suggestions with chat API | ✅ Done |
+| 20:00 | Fixed 5 pre-existing type errors, rebuilt corrupted `search.ts` | ✅ Done |
+
+**Key Changes:**
+- **build-analyzer.ts**: DDR4/DDR5 RAM check, Intel/AMD chipset mismatch, cooling adequacy, overspending detection
+- **build-parser.ts**: Amazon/Flipkart URL parsing, PCPartPicker table format, inline price extraction
+- **roast-suggestions.ts**: Grade system (S/A/B/C/D/F), priority ranking, savings calculation, alternative finder
+- **UI Components**: Animated score gauge, severity-styled issue cards with "Fix This" buttons
 
 ### 2026-02-02 (Afternoon Session)
 
@@ -78,8 +95,8 @@ This document tracks the progress of the SpecGen Chatbot development.
 
 - [x] **Day 5:** Project init, design system, page skeletons
 - [x] **Day 6:** RAG implementation (vector search + chat loop) ✅
-- [x] **Day 6.5:** Scraper Integration (live data pipeline) ✅ **NEW**
-- [ ] **Day 7:** "Roast & Fix" feature
+- [x] **Day 6.5:** Scraper Integration (live data pipeline) ✅
+- [x] **Day 7:** "Roast & Fix" feature ✅ **NEW**
 - [ ] **Day 8:** Tool calling + generative UI (product cards)
 - [ ] **Day 9:** Demo video + Devpost submission
 
@@ -136,7 +153,11 @@ User Query → Gemini Embedding (768-dim) → Cosine Similarity Search → Top 5
 | `scripts/generate-embeddings.ts` | Generates embeddings using Gemini |
 | `src/lib/search.ts` | Vector search + keyword fallback |
 | `src/lib/products.ts` | TypeScript types for products |
+| `src/lib/build-analyzer.ts` | Compatibility checks, bottleneck detection |
+| `src/lib/build-parser.ts` | Parse builds from text, URLs, PCPartPicker |
+| `src/lib/roast-suggestions.ts` | Grade system, fix suggestions, alternatives |
 | `src/app/api/chat/route.ts` | Chat API with RAG pipeline |
+| `src/components/roast/` | BuildScoreGauge, IssueCard UI components |
 
 ### Known Considerations
 - Using **AI SDK v6** which requires `toUIMessageStreamResponse()` for `useChat` compatibility
