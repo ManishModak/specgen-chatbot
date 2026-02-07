@@ -10,17 +10,18 @@ interface ProductCardProps {
     product: Product;
     className?: string;
     compact?: boolean; // For inline chat display
+    featured?: boolean; // For primary recommendation (larger, more prominent)
 }
 
-export function ProductCard({ product, className, compact = false }: ProductCardProps) {
+export function ProductCard({ product, className, compact = false, featured = false }: ProductCardProps) {
     const [imageError, setImageError] = useState(false);
 
     // Compact version for chat inline display
     if (compact) {
         return (
-            <a 
-                href={product.url} 
-                target="_blank" 
+            <a
+                href={product.url}
+                target="_blank"
                 rel="noopener noreferrer"
                 className={cn(
                     "group flex gap-3 rounded-xl border border-white/10 bg-black/40 p-3 backdrop-blur-sm transition-all hover:border-primary/50 hover:shadow-lg hover:shadow-primary/10",
@@ -62,6 +63,67 @@ export function ProductCard({ product, className, compact = false }: ProductCard
         );
     }
 
+    // Featured version for primary recommendations (horizontal layout with prominent styling)
+    if (featured) {
+        return (
+            <a
+                href={product.url}
+                target="_blank"
+                rel="noopener noreferrer"
+                className={cn(
+                    "group relative flex gap-4 rounded-xl border-2 border-primary/30 bg-gradient-to-r from-primary/10 via-black/40 to-black/40 p-4 backdrop-blur-sm transition-all hover:border-primary/60 hover:shadow-xl hover:shadow-primary/20",
+                    className
+                )}
+            >
+                {/* Featured Badge */}
+                <div className="absolute -top-2 left-4 z-10">
+                    <span className="inline-flex items-center rounded-full bg-primary px-2.5 py-0.5 text-xs font-semibold text-primary-foreground shadow-lg">
+                        🎯 Recommended
+                    </span>
+                </div>
+
+                {/* Product Image */}
+                <div className="relative size-28 flex-shrink-0 overflow-hidden rounded-lg bg-white/10 ring-2 ring-primary/20">
+                    {product.image && !imageError ? (
+                        <img
+                            src={product.image}
+                            alt={product.name}
+                            className="size-full object-contain p-2 transition-transform duration-300 group-hover:scale-105"
+                            onError={() => setImageError(true)}
+                        />
+                    ) : (
+                        <div className="flex size-full items-center justify-center text-muted-foreground">
+                            <ImageIcon className="size-10 opacity-30" />
+                        </div>
+                    )}
+                </div>
+
+                {/* Product Info */}
+                <div className="flex flex-1 flex-col justify-between min-w-0 pt-2">
+                    <div>
+                        <h3 className="line-clamp-2 text-base font-semibold text-white group-hover:text-primary transition-colors">
+                            {product.name}
+                        </h3>
+                        <p className="text-sm text-muted-foreground mt-0.5">{product.brand} • {product.retailer}</p>
+                    </div>
+                    <div className="flex items-center justify-between mt-2">
+                        <span className="text-xl font-bold text-primary">{formatPrice(product.price)}</span>
+                        <div className="flex items-center gap-2">
+                            {product.stock !== false && (
+                                <span className="inline-flex items-center rounded-md border border-green-500/20 bg-green-500/10 px-2 py-0.5 text-xs font-medium text-green-400">
+                                    <CheckIcon className="mr-1 size-3" /> In Stock
+                                </span>
+                            )}
+                            <span className="inline-flex items-center gap-1 text-xs text-muted-foreground group-hover:text-primary transition-colors">
+                                View Deal <ExternalLinkIcon className="size-3" />
+                            </span>
+                        </div>
+                    </div>
+                </div>
+            </a>
+        );
+    }
+
     // Full card version
     return (
         <div className={cn(
@@ -82,7 +144,7 @@ export function ProductCard({ product, className, compact = false }: ProductCard
                         <ImageIcon className="size-16 opacity-20" />
                     </div>
                 )}
-                
+
                 {/* Price Overlay */}
                 <div className="absolute bottom-0 left-0 right-0 bg-gradient-to-t from-black/80 via-black/50 to-transparent p-4">
                     <span className="text-2xl font-bold text-white drop-shadow-lg">{formatPrice(product.price)}</span>

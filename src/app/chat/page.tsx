@@ -26,6 +26,7 @@ import Link from "next/link";
 import { Button } from "@/components/ui/button";
 import { ModeToggle } from "@/components/mode-toggle";
 import { ProductCard } from "@/components/product-card";
+import { ProductRecommendationGroup } from "@/components/product-recommendation-group";
 import { Product } from "@/lib/products";
 
 export default function ChatPage() {
@@ -81,6 +82,33 @@ export default function ChatPage() {
         return segments.length > 0 ? segments : [{ type: 'text', content: text }];
     };
 
+    // Parse [[COMPONENT:category|PRIMARY:id|ALT:id,id,id]] tags for recommendation groups
+    type ComponentGroup = {
+        category: Product["category"];
+        primaryId: string;
+        alternateIds: string[];
+    };
+
+    const parseComponentTags = (text: string): { cleanText: string; components: ComponentGroup[] } => {
+        const regex = /\[\[COMPONENT:([^|]+)\|PRIMARY:([^|]+)\|ALT:([^\]]*)\]\]/g;
+        const components: ComponentGroup[] = [];
+        let cleanText = text;
+        let match;
+
+        while ((match = regex.exec(text)) !== null) {
+            const category = match[1] as Product["category"];
+            const primaryId = match[2];
+            const alternateIds = match[3] ? match[3].split(',').map(id => id.trim()).filter(Boolean) : [];
+
+            components.push({ category, primaryId, alternateIds });
+        }
+
+        // Remove component tags from text for clean display
+        cleanText = text.replace(regex, '');
+
+        return { cleanText, components };
+    };
+
     // Get message text content
     const getMessageText = (message: typeof messages[0]): string => {
         if (message.parts) {
@@ -92,7 +120,7 @@ export default function ChatPage() {
         return "";
     };
 
-    // Render message content with product cards
+    // Render message content with product cards and component groups
     const renderMessageContent = (message: typeof messages[0]) => {
         const text = getMessageText(message);
 
@@ -100,6 +128,58 @@ export default function ChatPage() {
             return <p className="whitespace-pre-wrap">{text}</p>;
         }
 
+        // Check for new component group format first
+        const { cleanText, components } = parseComponentTags(text);
+
+        if (components.length > 0) {
+            // New format: Render component groups with primary + alternates layout
+            const segments = parseProductTags(cleanText);
+            const hasProducts = segments.some(s => s.type === 'product');
+
+            return (
+                <div className="space-y-6">
+                    {/* Render text segments with inline products */}
+                    {(cleanText.trim() || hasProducts) && (
+                        <div className="space-y-4">
+                            {segments.map((segment, i) => {
+                                if (segment.type === 'text' && segment.content.trim()) {
+                                    return <MessageResponse key={i}>{segment.content}</MessageResponse>;
+                                } else if (segment.type === 'product') {
+                                    const product = productsMap.get(segment.content);
+                                    if (product) {
+                                        return <ProductCard key={i} product={product} compact />;
+                                    }
+                                }
+                                return null;
+                            })}
+                        </div>
+                    )}
+
+                    {/* Render component groups */}
+                    <div className="space-y-6 pt-2">
+                        {components.map((comp, i) => {
+                            const primary = productsMap.get(comp.primaryId);
+                            const alternates = comp.alternateIds
+                                .map(id => productsMap.get(id))
+                                .filter((p): p is Product => p !== undefined);
+
+                            if (!primary) return null;
+
+                            return (
+                                <ProductRecommendationGroup
+                                    key={`${comp.category}-${i}`}
+                                    category={comp.category}
+                                    primary={primary}
+                                    alternates={alternates}
+                                />
+                            );
+                        })}
+                    </div>
+                </div>
+            );
+        }
+
+        // Legacy format: Handle [[PRODUCT:id]] tags
         const segments = parseProductTags(text);
         const hasProducts = segments.some(s => s.type === 'product');
 
@@ -107,17 +187,54 @@ export default function ChatPage() {
             return <MessageResponse>{text}</MessageResponse>;
         }
 
+        // Group consecutive products together for grid layout
+        type RenderGroup =
+            | { type: 'text'; content: string }
+            | { type: 'products'; products: Product[] };
+
+        const groups: RenderGroup[] = [];
+        let currentProductGroup: Product[] = [];
+
+        const flushProductGroup = () => {
+            if (currentProductGroup.length > 0) {
+                groups.push({ type: 'products', products: [...currentProductGroup] });
+                currentProductGroup = [];
+            }
+        };
+
+        segments.forEach((segment) => {
+            if (segment.type === 'text' && segment.content.trim()) {
+                flushProductGroup();
+                groups.push({ type: 'text', content: segment.content });
+            } else if (segment.type === 'product') {
+                const product = productsMap.get(segment.content);
+                if (product) {
+                    currentProductGroup.push(product);
+                }
+            }
+        });
+        flushProductGroup();
+
         return (
             <div className="space-y-4">
-                {segments.map((segment, i) => {
-                    if (segment.type === 'text' && segment.content.trim()) {
-                        return <MessageResponse key={i}>{segment.content}</MessageResponse>;
-                    } else if (segment.type === 'product') {
-                        const product = productsMap.get(segment.content);
-                        if (product) {
-                            return <ProductCard key={i} product={product} compact />;
-                        }
-                        return null;
+                {groups.map((group, i) => {
+                    if (group.type === 'text') {
+                        return <MessageResponse key={i}>{group.content}</MessageResponse>;
+                    } else if (group.type === 'products') {
+                        // Responsive grid: 1 col mobile, 2 cols tablet, 3 cols desktop
+                        const gridCols = group.products.length === 1
+                            ? 'grid-cols-1'
+                            : group.products.length === 2
+                                ? 'grid-cols-1 sm:grid-cols-2'
+                                : 'grid-cols-1 sm:grid-cols-2 lg:grid-cols-3';
+
+                        return (
+                            <div key={i} className={`grid ${gridCols} gap-3`}>
+                                {group.products.map((product, j) => (
+                                    <ProductCard key={`${i}-${j}`} product={product} compact />
+                                ))}
+                            </div>
+                        );
                     }
                     return null;
                 })}
